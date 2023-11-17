@@ -12,7 +12,7 @@
 #include <esp_log.h>
 
 //#define CONFIG_CS_GPIO 18
-#define CONFIG_RST_GPIO 23//14   //TTGO_BEAM usa reset no pino 23 // outros módulos no pino 14
+#define CONFIG_RST_GPIO 23 //14   //TTGO_BEAM usa reset no pino 23 // outros módulos no pino 14
 //#define CONFIG_MISO_GPIO 19
 //#define CONFIG_MOSI_GPIO 27
 //#define CONFIG_SCK_GPIO 5
@@ -250,7 +250,7 @@ lora_reset(void)
 
 /**
  * Configure explicit header mode.
- * Packet size will be included in the frame.
+ * frame size will be included in the frame.
  */
 void 
 lora_explicit_header_mode(void)
@@ -261,8 +261,8 @@ lora_explicit_header_mode(void)
 
 /**
  * Configure implicit header mode.
- * All packets will have a predefined size.
- * @param size Size of the packets.
+ * All frames will have a predefined size.
+ * @param size Size of the frames.
  */
 void 
 lora_implicit_header_mode(int size)
@@ -294,7 +294,7 @@ lora_sleep(void)
 
 /**
  * Sets the radio transceiver in receive mode.
- * Incoming packets will be received.
+ * Incoming frames will be received.
  */
 void 
 lora_receive(void)
@@ -508,7 +508,7 @@ lora_set_sync_word(int sw)
 }
 
 /**
- * Enable appending/verifying packet CRC.
+ * Enable appending/verifying frame CRC.
  */
 void 
 lora_enable_crc(void)
@@ -517,7 +517,7 @@ lora_enable_crc(void)
 }
 
 /**
- * Disable appending/verifying packet CRC.
+ * Disable appending/verifying frame CRC.
  */
 void 
 lora_disable_crc(void)
@@ -774,11 +774,11 @@ uint32_t lora_cca(void)
 }
 
 /**
- * Send a packet.
+ * Send a frame.
  * @param buf Data to be sent
  * @param size Size of data.
  */
-uint32_t lora_send_packet(uint8_t *buf, int size, uint32_t timeout)
+uint32_t lora_send_frame(uint8_t *buf, int size, uint32_t timeout)
 {
    /*
     * Transfer data to radio.
@@ -821,12 +821,12 @@ uint32_t lora_send_packet(uint8_t *buf, int size, uint32_t timeout)
 }
 
 /**
- * Read a received packet.
+ * Read a received frame.
  * @param buf Buffer for the data.
  * @param size Available size in buffer (bytes).
- * @return Number of bytes received (zero if no packet available).
+ * @return Number of bytes received (zero if no frame available).
  */
-int lora_receive_packet(uint8_t *buf, int size)
+int lora_read_frame(uint8_t *buf, int size)
 {
    int len = 0;
 
@@ -844,7 +844,7 @@ int lora_receive_packet(uint8_t *buf, int size)
    } 
 
    /*
-    * Find packet size.
+    * Find frame size.
     */
    if (__implicit) len = lora_read_reg(REG_PAYLOAD_LENGTH);
    else len = lora_read_reg(REG_RX_NB_BYTES);
@@ -862,7 +862,7 @@ int lora_receive_packet(uint8_t *buf, int size)
 }
 
 /**
- * Returns non-zero if there is data to read (packet received).
+ * Returns non-zero if there is data to read (frame received).
  */
 int lora_received(uint32_t timeout)
 {
@@ -875,19 +875,19 @@ int lora_received(uint32_t timeout)
 }
 
 /**
- * Return last packet's RSSI.
+ * Return last frame's RSSI.
  */
 int 
-lora_packet_rssi(void)
+lora_frame_rssi(void)
 {
    return (lora_read_reg(REG_PKT_RSSI_VALUE) - (__frequency < 868E6 ? 164 : 157));
 }
 
 /**
- * Return last packet's SNR (signal to noise ratio).
+ * Return last frame's SNR (signal to noise ratio).
  */
 float 
-lora_packet_snr(void)
+lora_frame_snr(void)
 {
    return ((int8_t)lora_read_reg(REG_PKT_SNR_VALUE)) * 0.25;
 }
