@@ -43,7 +43,7 @@
 #define BOARD_V2_16     3
 #define BOARD_TTGO_BEAM 4
 
-#define BOARD   BOARD_TTGO_BEAM
+#define BOARD   BOARD_V1
 
 
 #define PRINT_DEBUG 0
@@ -52,7 +52,7 @@
 
 #define HAVE_LORA   1
 #define HAVE_SDCARD 0
-#define HAVE_OLED   1
+#define HAVE_OLED   0
 
 // Utilizado para debug em campo
 #define HAVE_LED    0
@@ -132,10 +132,11 @@ void task_test_SSD1306i2c(void *ignore) {
 
 	u8g2_SetFont(&u8g2, u8g2_font_6x10_tr);
 
+    uint32_t cnt=0;
 	while(1){
 		vTaskDelay(2000);
 		u8g2_ClearBuffer(&u8g2);
-		sprintf(string, "Recebendo %s", global_counter);
+		sprintf(string, "Recebendo %ld", cnt++);
 	    u8g2_DrawStr(&u8g2, 1,17,string);
 		//ESP_LOGI(TAG, "u8g2_SendBuffer");
 		u8g2_SendBuffer(&u8g2);
@@ -143,129 +144,34 @@ void task_test_SSD1306i2c(void *ignore) {
 
 }
 
-#if 0
-static const char *TAG2 = "sd_card";
-void task_sdcard(void *p)
-{
-    ESP_LOGI(TAG2, "Initializing SD card");
-
-#ifndef USE_SPI_MODE
-    ESP_LOGI(TAG2, "Using SDMMC peripheral");
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-
-    // This initializes the slot without card detect (CD) and write protect (WP) signals.
-    // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
-    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
-
-    // To use 1-line SD mode, uncomment the following line:
-    // slot_config.width = 1;
-
-    // GPIOs 15, 2, 4, 12, 13 should have external 10k pull-ups.
-    // Internal pull-ups are not sufficient. However, enabling internal pull-ups
-    // does make a difference some boards, so we do that here.
-    gpio_set_pull_mode(15, GPIO_PULLUP_ONLY);   // CMD, needed in 4- and 1- line modes
-    gpio_set_pull_mode(2, GPIO_PULLUP_ONLY);    // D0, needed in 4- and 1-line modes
-    gpio_set_pull_mode(4, GPIO_PULLUP_ONLY);    // D1, needed in 4-line mode only
-    gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);   // D2, needed in 4-line mode only
-    gpio_set_pull_mode(13, GPIO_PULLUP_ONLY);   // D3, needed in 4- and 1-line modes
-
-#else
-    ESP_LOGI(TAG2, "Using SPI peripheral");
-
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    sdspi_slot_config_t slot_config = SDSPI_SLOT_CONFIG_DEFAULT();
-    slot_config.gpio_miso = PIN_NUM_MISO;
-    slot_config.gpio_mosi = PIN_NUM_MOSI;
-    slot_config.gpio_sck  = PIN_NUM_CLK;
-    slot_config.gpio_cs   = PIN_NUM_CS;
-    // This initializes the slot without card detect (CD) and write protect (WP) signals.
-    // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
-#endif //USE_SPI_MODE
-
-    // Options for mounting the filesystem.
-    // If format_if_mount_failed is set to true, SD card will be partitioned and
-    // formatted in case when mounting fails.
-    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
-        .max_files = 5,
-        .allocation_unit_size = 16 * 1024
-    };
-
-    // Use settings defined above to initialize SD card and mount FAT filesystem.
-    // Note: esp_vfs_fat_sdmmc_mount is an all-in-one convenience function.
-    // Please check its source code and implement error recovery when developing
-    // production applications.
-    sdmmc_card_t* card;
-    esp_err_t ret = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &card);
-
-    if (ret != ESP_OK) {
-        if (ret == ESP_FAIL) {
-            ESP_LOGE(TAG2, "Failed to mount filesystem. "
-                "If you want the card to be formatted, set format_if_mount_failed = true.");
-        } else {
-            ESP_LOGE(TAG2, "Failed to initialize the card (%s). "
-                "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(ret));
+void lora_transmit_task(void *param) {
+    (void)param;
+    static const char *TAG = "lora_tx";
+    uint16_t cnt = 0;
+    char buffer[16];
+    while(1) {
+        int len = sprintf(buffer, "Teste: %d\n", cnt++);
+        if (lora_send_frame((uint8_t *)buffer, len, 1000) == pdTRUE) {
+            ESP_LOGI(TAG, "Frame transmitted!");
+        }else {
+            ESP_LOGI(TAG, "Failure on transmitting frame!");
         }
-        return;
+        vTaskDelay(1000);
     }
-
-    // Card has been initialized, print its properties
-    sdmmc_card_print_info(stdout, card);
-
-    // Use POSIX and C standard library functions to work with files.
-    // First create a file.
-    ESP_LOGI(TAG2, "Opening file");
-    FILE* f = fopen("/sdcard/hello.txt", "w");
-    if (f == NULL) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
-        return;
-    }
-    fprintf(f, "Hello %s!\n", card->cid.name);
-    fclose(f);
-    ESP_LOGI(TAG, "File written");
-
-    // Check if destination file exists before renaming
-    struct stat st;
-    if (stat("/sdcard/foo.txt", &st) == 0) {
-        // Delete it if it exists
-        unlink("/sdcard/foo.txt");
-    }
-
-    // Rename original file
-    ESP_LOGI(TAG, "Renaming file");
-    if (rename("/sdcard/hello.txt", "/sdcard/foo.txt") != 0) {
-        ESP_LOGE(TAG, "Rename failed");
-        return;
-    }
-
-    // Open renamed file for reading
-    ESP_LOGI(TAG, "Reading file");
-    f = fopen("/sdcard/foo.txt", "r");
-    if (f == NULL) {
-        ESP_LOGE(TAG2, "Failed to open file for reading");
-        return;
-    }
-    char line[64];
-    fgets(line, sizeof(line), f);
-    fclose(f);
-    // strip newline
-    char* pos = strchr(line, '\n');
-    if (pos) {
-        *pos = '\0';
-    }
-    ESP_LOGI(TAG2, "Read from file: '%s'", line);
-
-    // All done, unmount partition and disable SDMMC or SPI peripheral
-    esp_vfs_fat_sdmmc_unmount();
-    ESP_LOGI(TAG2, "Card unmounted");
-
-    while(1){
-	vTaskDelay(1000);
-    }
-
 }
-#endif
 
+void lora_receive_task(void *param) {
+    (void)param;
+    static const char *TAG = "lora_rx";
+    char buffer[16];
+    while(1) {
+        lora_receive();
+        lora_received(portMAX_DELAY);
+        memset(buffer, 0, 16);
+        lora_read_frame((uint8_t *)buffer, 16);
+        ESP_LOGI(TAG, "%s", buffer);
+    }
+}
 
 void app_main()
 {
@@ -291,10 +197,19 @@ void app_main()
    // Init LoRa with datarate 4
    if (lora_init(4, CHANNEL_0, 20, true, true, true)) {
         // init openlora stack
+        #if MODE == RECEIVER
+        ol_init(1, OL_BORDER_ROUTER_ADDR);
+        #else
+        ol_init(1, 1);
+        #endif
    }
 
+   #if MODE ==  TRANSMITTER
+   xTaskCreate(lora_transmit_task, "task_lora_tx", 2048, NULL, 4, NULL);
+   #endif
    // Tarefa OLED
    #if MODE == RECEIVER
+   xTaskCreate(lora_receive_task, "task_lora_tx", 2048, NULL, 4, NULL);
    #if HAVE_OLED == 1
    xTaskCreate(&task_test_SSD1306i2c, "task_oled", 10*1024, NULL, 4, NULL);
    #endif

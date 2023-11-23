@@ -1,8 +1,4 @@
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/semphr.h"
-#include "freertos/queue.h"
 #include "esp_system.h"
 #include "driver/spi_master.h"
 #include "soc/gpio_struct.h"
@@ -10,6 +6,7 @@
 #include <string.h>
 
 #include <esp_log.h>
+#include "lora.h"
 
 //#define CONFIG_CS_GPIO 18
 #define CONFIG_RST_GPIO 23 //14   //TTGO_BEAM usa reset no pino 23 // outros módulos no pino 14
@@ -417,8 +414,7 @@ void lora_max_payload_lenght(uint8_t lenght) {
  * Set carrier frequency.
  * @param frequency Frequency in Hz
  */
-void 
-lora_set_frequency(uint32_t frequency)
+void lora_set_frequency(uint32_t frequency)
 {
    __frequency = frequency;
 
@@ -814,10 +810,6 @@ uint32_t lora_send_frame(uint8_t *buf, int size, uint32_t timeout)
 
    // wait until transmission completed
    return xSemaphoreTake(lora_sem_tx, timeout);
-
-   //while((lora_read_reg(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) == 0) {
-   //   vTaskDelay(2);
-   //}
 }
 
 /**
@@ -872,6 +864,10 @@ int lora_received(uint32_t timeout)
    }
 
    return pdFALSE;
+}
+
+SemaphoreHandle_t lora_get_received_sem(void) {
+   return lora_sem_rx;
 }
 
 /**

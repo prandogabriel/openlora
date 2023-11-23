@@ -2,6 +2,10 @@
 #ifndef __LORA_H__
 #define __LORA_H__
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "freertos/queue.h"
 
 #define CHANNEL_0   915200000
 #define CHANNEL_1   915400000
@@ -28,7 +32,7 @@ void lora_idle(void);
 void lora_sleep(void); 
 void lora_receive(void);
 void lora_set_tx_power( int8_t power, bool pa_boost);
-void lora_set_frequency(long frequency);
+void lora_set_frequency(uint32_t frequency);
 void lora_set_spreading_factor(int sf);
 void lora_set_bandwidth(long sbw);
 void lora_set_coding_rate(int denominator);
@@ -41,6 +45,7 @@ uint32_t lora_cca(void);
 uint32_t lora_send_frame(uint8_t *buf, int size, uint32_t timeout);
 int lora_read_frame(uint8_t *buf, int size);
 int lora_received(uint32_t timeout);
+SemaphoreHandle_t lora_get_received_sem(void);
 int lora_frame_rssi(void);
 float lora_frame_snr(void);
 void lora_close(void);

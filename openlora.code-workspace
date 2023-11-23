@@ -1,0 +1,37 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "esp-idf",
+			"path": "/home/gustavo/esp/esp-idf-v5.1.1"
+		},
+		{
+			"name": "openlora",
+			"path": "/home/gustavo/esp/openlora"
+		}
+	],
+	"settings": {
+		"C_Cpp.default.includePath": [
+			"${workspaceFolder:esp-idf}/components/freertos/FreeRTOS-Kernel/include"
+		],
+
+		"cmake.configureOnOpen": false,
+
+		"files.associations": {
+			"sensor.h": "c",
+			"gpio.h": "c",
+			"device.h": "c",
+			"i2c.h": "c",
+			"kernel.h": "c",
+			"__assert.h": "c",
+			"string.h": "c",
+			"typeinfo": "c",
+			"freertos.h": "c",
+			"task.h": "c",
+			"queue.h": "c"
+		},
+	}
+
+}
