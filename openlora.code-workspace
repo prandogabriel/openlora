@@ -14,7 +14,9 @@
 	],
 	"settings": {
 		"C_Cpp.default.includePath": [
-			"${workspaceFolder:esp-idf}/components/freertos/FreeRTOS-Kernel/include"
+			"${workspaceFolder:esp-idf}/components/freertos/FreeRTOS-Kernel/include",
+			"${workspaceFolder:openlora}/main",
+			"${workspaceFolder:openlora}/components/lora/include"
 		],
 
 		"cmake.configureOnOpen": false,
