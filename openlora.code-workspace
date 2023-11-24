@@ -32,7 +32,11 @@
 			"typeinfo": "c",
 			"freertos.h": "c",
 			"task.h": "c",
-			"queue.h": "c"
+			"queue.h": "c",
+			"cstdint": "c",
+			"unistd.h": "c",
+			"openlora.h": "c",
+			"lora.h": "c"
 		},
 	}
 

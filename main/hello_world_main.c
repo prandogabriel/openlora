@@ -149,13 +149,23 @@ void lora_transmit_task(void *param) {
     static const char *TAG = "lora_tx";
     uint16_t cnt = 0;
     char buffer[16];
+
     while(1) {
+        int len = sprintf(buffer, "Teste: %d\n", cnt++);
+        net_if_buffer_descriptor_t *packet  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+len);
+        if (packet != NULL) {
+            memcpy(&packet->puc_link_buffer[sizeof(link_layer_header_t)], buffer, len+1);
+            ol_to_link_layer(packet, portMAX_DELAY);
+        }
+        #if 0
         int len = sprintf(buffer, "Teste: %d\n", cnt++);
         if (lora_send_frame((uint8_t *)buffer, len, 1000) == pdTRUE) {
             ESP_LOGI(TAG, "Frame transmitted!");
         }else {
             ESP_LOGI(TAG, "Failure on transmitting frame!");
         }
+        #endif
+
         vTaskDelay(1000);
     }
 }
@@ -168,8 +178,9 @@ void lora_receive_task(void *param) {
         lora_receive();
         lora_received(portMAX_DELAY);
         memset(buffer, 0, 16);
+        int len = lora_read_frame_size();
         lora_read_frame((uint8_t *)buffer, 16);
-        ESP_LOGI(TAG, "%s", buffer);
+        ESP_LOGI(TAG, "Size: %d - %s", len, buffer);
     }
 }
 
@@ -209,7 +220,7 @@ void app_main()
    #endif
    // Tarefa OLED
    #if MODE == RECEIVER
-   xTaskCreate(lora_receive_task, "task_lora_tx", 2048, NULL, 4, NULL);
+   //xTaskCreate(lora_receive_task, "task_lora_tx", 2048, NULL, 4, NULL);
    #if HAVE_OLED == 1
    xTaskCreate(&task_test_SSD1306i2c, "task_oled", 10*1024, NULL, 4, NULL);
    #endif

@@ -786,8 +786,9 @@ uint32_t lora_send_frame(uint8_t *buf, int size, uint32_t timeout)
    lora_write_reg( REG_INVERT_IQ, ( ( lora_read_reg( REG_INVERT_IQ ) & RFLR_INVERTIQ_TX_MASK & RFLR_INVERTIQ_RX_MASK ) | RFLR_INVERTIQ_RX_OFF | RFLR_INVERTIQ_TX_ON ) );
    lora_write_reg( REG_INVERT_IQ2, RFLR_INVERTIQ2_ON );
 
-   for(int i=0; i<size; i++) 
+   for(int i=0; i<size; i++) {
       lora_write_reg(REG_FIFO, *buf++);
+   }
    
    lora_write_reg(REG_PAYLOAD_LENGTH, size);
    
@@ -853,17 +854,39 @@ int lora_read_frame(uint8_t *buf, int size)
    return len;
 }
 
+int lora_read_frame_size(void)
+{
+   int len = 0;
+
+   /*
+    * Check interrupts.
+    */
+   int irq = lora_read_reg(REG_IRQ_FLAGS);
+   lora_write_reg(REG_IRQ_FLAGS, irq);
+   //if((irq & IRQ_RX_DONE_MASK) == 0) return 0;
+   if(irq & IRQ_PAYLOAD_CRC_ERROR_MASK) {
+      #if VERBOSE != 0
+      ESP_LOGI( LORA_TAG, "Error - IRQ: 0x%02X\n", irq);
+      #endif
+      return 0;
+   } 
+
+   /*
+    * Find frame size.
+    */
+   if (__implicit) len = lora_read_reg(REG_PAYLOAD_LENGTH);
+   else len = lora_read_reg(REG_RX_NB_BYTES);
+
+   return len;
+}
+
+
 /**
  * Returns non-zero if there is data to read (frame received).
  */
 int lora_received(uint32_t timeout)
 {
-   if (xSemaphoreTake(lora_sem_rx, timeout) == pdTRUE)
-   {
-      return pdTRUE;
-   }
-
-   return pdFALSE;
+   return (int)xSemaphoreTake(lora_sem_rx, timeout);
 }
 
 SemaphoreHandle_t lora_get_received_sem(void) {

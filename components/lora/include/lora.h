@@ -44,6 +44,7 @@ int lora_init(uint8_t datarate, long frequency, int8_t power_level, bool pa_boos
 uint32_t lora_cca(void);
 uint32_t lora_send_frame(uint8_t *buf, int size, uint32_t timeout);
 int lora_read_frame(uint8_t *buf, int size);
+int lora_read_frame_size(void);
 int lora_received(uint32_t timeout);
 SemaphoreHandle_t lora_get_received_sem(void);
 int lora_frame_rssi(void);
