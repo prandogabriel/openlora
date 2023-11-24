@@ -25,6 +25,20 @@ static net_if_buffer_descriptor_t net_if_buffer_descriptors[NUMBER_OF_NET_IF_DES
 static openlora_t openlora;
 static const char *OPEN_LORA_TAG = "lora_tx";
 
+/* Define the size of the item to be held by queue 1 and queue 2 respectively.
+The values used here are just for demonstration purposes. */
+#define LINK_LAYER_QUEUE    16
+
+/* Binary semaphores have an effective length of 1. */
+#define BINARY_SEMAPHORE_LENGTH	1
+
+/* The combined length of the two queues and binary semaphore that will be
+added to the queue set. */
+#define COMBINED_LENGTH ( LINK_LAYER_QUEUE + BINARY_SEMAPHORE_LENGTH )
+
+static QueueHandle_t tx_link_layer_queue;
+static QueueHandle_t rx_link_layer_queue;
+
 void ol_init_net_if_buffers(void){
     for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
         net_if_buffer_descriptors[i].puc_link_buffer = NULL;
@@ -189,19 +203,41 @@ uint32_t ol_send_link_ack(net_if_buffer_descriptor_t *net_if_buffer, uint32_t ti
     return ret;
 }
 
-/* Define the size of the item to be held by queue 1 and queue 2 respectively.
-The values used here are just for demonstration purposes. */
-#define LINK_LAYER_QUEUE    16
-
-/* Binary semaphores have an effective length of 1. */
-#define BINARY_SEMAPHORE_LENGTH	1
-
-/* The combined length of the two queues and binary semaphore that will be
-added to the queue set. */
-#define COMBINED_LENGTH ( LINK_LAYER_QUEUE + BINARY_SEMAPHORE_LENGTH )
-
-static QueueHandle_t tx_link_layer_queue;
-static QueueHandle_t rx_link_layer_queue;
+void ol_receive_link_frame(uint32_t timeout){
+    if (lora_received(timeout) == pdTRUE) {
+        int len = lora_read_frame_size();
+        net_if_buffer_descriptor_t *net_if_buffer = ol_get_net_if_buffer((uint8_t)len);
+        int x = lora_read_frame(net_if_buffer->puc_link_buffer, net_if_buffer->data_lenght);
+        if (x) {
+            link_layer_header_t *link_frame_header = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
+            link_layer_trailer_t *link_frame_trailer = (link_layer_trailer_t *)&net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+link_frame_header->payload_size];
+            uint16_t crc = usLORACRC16(net_if_buffer->puc_link_buffer, (net_if_buffer->data_lenght - sizeof(link_layer_trailer_t)));
+            if (link_frame_trailer->crc == crc) {
+                if ((link_frame_header->frame_type == DATA_FRAME) && (link_frame_header->network_id == openlora.nwk_id) && (link_frame_header->dst_addr == openlora.node_addr)) {
+                    (void)ol_send_link_ack(net_if_buffer, LINK_ACK_TIMEOUT);
+                    if (openlora.neigh_seq_number[link_frame_header->src_addr] != link_frame_header->seq_number) {
+                        openlora.neigh_seq_number[link_frame_header->src_addr] = link_frame_header->seq_number;
+                        if (xQueueSendToBack(rx_link_layer_queue, &net_if_buffer, timeout) == pdTRUE) {
+                            ESP_LOGI(OPEN_LORA_TAG, "link frame sent to the upper layer");
+                        }else {
+                            ESP_LOGI(OPEN_LORA_TAG, "full upper layer queue");
+                            ol_release_net_if_buffer(net_if_buffer);
+                        }
+                    }
+                }else {
+                    ESP_LOGI(OPEN_LORA_TAG, "not the link frame destination");
+                    ol_release_net_if_buffer(net_if_buffer);
+                }
+            }else {
+                ol_release_net_if_buffer(net_if_buffer);
+                ESP_LOGI(OPEN_LORA_TAG, "link frame with wrong CRC");
+            }
+        }else {
+            ol_release_net_if_buffer(net_if_buffer);
+            ESP_LOGI(OPEN_LORA_TAG, "zero size link frame");
+        }
+    }
+}
 
 BaseType_t ol_to_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
     return xQueueSendToBack(tx_link_layer_queue, &buffer, timeout);
@@ -257,39 +293,7 @@ void ol_link_layer_task(void *arg) {
 
         }else if( xActivatedMember == sem_radio ){
             // Receive a packet
-            if (lora_received(10) == pdTRUE) {
-                int len = lora_read_frame_size();
-                net_if_buffer_descriptor_t *net_if_buffer = ol_get_net_if_buffer((uint8_t)len);
-                int x = lora_read_frame(net_if_buffer->puc_link_buffer, net_if_buffer->data_lenght);
-                if (x) {
-                    link_layer_header_t *link_frame_header = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
-                    link_layer_trailer_t *link_frame_trailer = (link_layer_trailer_t *)&net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+link_frame_header->payload_size];
-                    uint16_t crc = usLORACRC16(net_if_buffer->puc_link_buffer, (net_if_buffer->data_lenght - sizeof(link_layer_trailer_t)));
-                    if (link_frame_trailer->crc == crc) {
-                        if ((link_frame_header->frame_type == DATA_FRAME) && (link_frame_header->network_id == openlora.nwk_id) && (link_frame_header->dst_addr == openlora.node_addr)) {
-                            (void)ol_send_link_ack(net_if_buffer, LINK_ACK_TIMEOUT);
-                            if (openlora.neigh_seq_number[link_frame_header->src_addr] != link_frame_header->seq_number) {
-                                openlora.neigh_seq_number[link_frame_header->src_addr] = link_frame_header->seq_number;
-                                if (xQueueSendToBack(rx_link_layer_queue, &net_if_buffer, 100) == pdTRUE) {
-                                    ESP_LOGI(OPEN_LORA_TAG, "link frame sent to the upper layer");
-                                }else {
-                                    ESP_LOGI(OPEN_LORA_TAG, "full upper layer queue");
-                                    ol_release_net_if_buffer(net_if_buffer);
-                                }
-                            }
-                        }else {
-                            ESP_LOGI(OPEN_LORA_TAG, "not the link frame destination");
-                            ol_release_net_if_buffer(net_if_buffer);
-                        }
-                    }else {
-                        ol_release_net_if_buffer(net_if_buffer);
-                        ESP_LOGI(OPEN_LORA_TAG, "link frame with wrong CRC");
-                    }
-                }else {
-                    ol_release_net_if_buffer(net_if_buffer);
-                    ESP_LOGI(OPEN_LORA_TAG, "zero size link frame");
-                }
-            }
+            ol_receive_link_frame(10);
         }
 
     }
