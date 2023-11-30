@@ -53,21 +53,48 @@ typedef struct __attribute__((packed)) {
     uint16_t            crc;
 }link_layer_trailer_t;
 
+typedef enum __attribute__((packed)) {
+    NEIGHBOR_REQ = 1,
+    NEIGHBOR_ADV,
+    ROUTER_ADV,
+    DATA_PACKET,
+}network_packet_type_t;
+
+typedef struct __attribute__((packed)) {
+    network_packet_type_t   packet_type;
+    uint8_t                 hops;
+    uint16_t                dst_addr;
+    uint16_t                src_addr;
+    uint8_t                 payload_size;
+}network_layer_header_t;
+
+struct transp_layer_s{
+    uint8_t                 dst_port;
+    uint8_t                 src_port;
+    uint8_t                 dst_addr;
+    uint8_t                 src_addr;
+    SemaphoreHandle_t       transp_wakeup;
+    uint8_t                 payload_size;
+    struct transp_layer_s   *next;
+    struct transp_layer_s   *previous;
+};
+
+typedef struct transp_layer_s transport_layer_t;
+
+typedef enum __attribute__((packed)) {
+    TRANSP_DATAGRAM = 1,
+    TRANSP_SEGMENT
+}transp_protocol_type_t;
+
+typedef struct __attribute__((packed, aligned(1))) {
+    uint8_t                 dst_port;
+    uint8_t                 src_port;
+    transp_protocol_type_t  protocol;
+    uint8_t                 payload_size;
+}transport_layer_header_t;
+
+void ol_init(uint8_t nwk_id, uint8_t addr);
 BaseType_t ol_to_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
 BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
 net_if_buffer_descriptor_t *ol_get_net_if_buffer(uint8_t size);
 void ol_release_net_if_buffer(net_if_buffer_descriptor_t *buffer);
-
-
-
-
-
-
-typedef struct {
-    uint16_t        dst_port;
-    uint16_t        src_port;
-    uint8_t         payload_size;
-}transp_layer_t;
-
-
-void ol_init(uint8_t nwk_id, uint8_t addr);
