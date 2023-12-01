@@ -40,73 +40,98 @@ The values used here are just for demonstration purposes. */
 /* The combined length of the two queues and binary semaphore that will be
 added to the queue set. */
 #define COMBINED_LENGTH_LINK ( LINK_LAYER_QUEUE + BINARY_SEMAPHORE_LENGTH )
-#define COMBINED_LENGTH_TRANSP ( TRANSP_LAYER_QUEUE_TX + LINK_LAYER_QUEUE )
+#define COMBINED_LENGTH_TRANSP ( TRANSP_LAYER_QUEUE_TX + LINK_LAYER_QUEUE + BINARY_SEMAPHORE_LENGTH)
 
-static SemaphoreHandle_t ol_available_network_buffer;
+static SemaphoreHandle_t ol_available_network_buffer = NULL;
+static SemaphoreHandle_t ol_network_buffer_mutex = NULL;
 
-static QueueHandle_t tx_link_layer_queue;
-static QueueHandle_t rx_link_layer_queue;
+static QueueHandle_t        tx_link_layer_queue;
+static QueueHandle_t        rx_link_layer_queue;
 
-static QueueHandle_t tx_transp_layer_queue;
-static QueueHandle_t rx_transp_layer_queue;
+static SemaphoreHandle_t    link_layer_tx_ready_signal;
 
-void ol_init_net_if_buffers(void){
+static QueueHandle_t        tx_transp_layer_queue;
+static QueueHandle_t        rx_transp_layer_queue;
+
+BaseType_t ol_init_net_if_buffers(void){
     for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
         net_if_buffer_descriptors[i].puc_link_buffer = NULL;
         net_if_buffer_descriptors[i].data_lenght = 0;
+        net_if_buffer_descriptors[i].dst_addr = 0xFF;
     }
+    ol_available_network_buffer = xSemaphoreCreateCounting( NUMBER_OF_NET_IF_DESCRIPTORS, NUMBER_OF_NET_IF_DESCRIPTORS );
+    ol_network_buffer_mutex = xSemaphoreCreateMutex();
+    if ((ol_available_network_buffer != NULL) && (ol_network_buffer_mutex != NULL)){
+        return pdPASS;
+    }
+    return pdFAIL;
 }
 
 void ol_link_layer_task(void *arg);
 void ol_transport_layer_task(void *arg);
 
-void ol_init(uint8_t nwk_id, uint8_t addr) {
-    ol_init_net_if_buffers();
-    ol_available_network_buffer = xSemaphoreCreateBinary();
+BaseType_t ol_init(uint8_t nwk_id, uint8_t addr) {
+    if (ol_init_net_if_buffers() == pdFAIL) {
+        return pdFAIL;
+    }
 
     openlora.nwk_id = nwk_id;
     openlora.node_addr = addr;
     openlora.mac_seq_number = 0;
     memset(openlora.neigh_seq_number, 0xFF, 256);
 
-    xTaskCreate(ol_link_layer_task, "OL Link Layer Task", 2048, NULL, 4, NULL);
-    xTaskCreate(ol_transport_layer_task, "OL Transport Layer Task", 2048, NULL, 3, NULL);
-}
-
-net_if_buffer_descriptor_t *ol_get_net_if_buffer(uint8_t size){
-    for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
-        if (net_if_buffer_descriptors[i].puc_link_buffer == NULL) {
-            net_if_buffer_descriptors[i].puc_link_buffer = pvPortMalloc(size);
-            net_if_buffer_descriptors[i].data_lenght = size;
-            return &net_if_buffer_descriptors[i];
-        }
+    TaskHandle_t link_task_handle;
+    if (xTaskCreate(ol_link_layer_task, "OL Link Layer Task", 2048, NULL, 4, &link_task_handle) != pdPASS) {
+        vSemaphoreDelete(ol_available_network_buffer);
+        vSemaphoreDelete(ol_network_buffer_mutex);
+        return pdFAIL;
     }
-    return NULL;
+    if (xTaskCreate(ol_transport_layer_task, "OL Transport Layer Task", 2048, NULL, 3, NULL) != pdPASS) {
+        vSemaphoreDelete(ol_available_network_buffer);
+        vSemaphoreDelete(ol_network_buffer_mutex);
+        vTaskDelete(link_task_handle);
+        return pdFAIL;
+    }
+    return pdPASS;
 }
 
-net_if_buffer_descriptor_t *ol_get_net_if_buffer_blocking(uint8_t size){
-    while(1) {
-        for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
-            if (net_if_buffer_descriptors[i].puc_link_buffer == NULL) {
-                net_if_buffer_descriptors[i].puc_link_buffer = pvPortMalloc(size);
-                net_if_buffer_descriptors[i].data_lenght = size;
-                return &net_if_buffer_descriptors[i];
+net_if_buffer_descriptor_t *ol_get_net_if_buffer(uint8_t size, uint32_t timeout){
+    if (xSemaphoreTake(ol_available_network_buffer, timeout) == pdTRUE){
+        if (xSemaphoreTake(ol_network_buffer_mutex, timeout) == pdTRUE){
+            for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
+                if (net_if_buffer_descriptors[i].puc_link_buffer == NULL) {
+                    net_if_buffer_descriptors[i].puc_link_buffer = pvPortMalloc(size);
+                    net_if_buffer_descriptors[i].data_lenght = size;
+                    xSemaphoreGive(ol_network_buffer_mutex);
+                    return &net_if_buffer_descriptors[i];
+                }
             }
+            xSemaphoreGive(ol_network_buffer_mutex);
+        }else {
+            xSemaphoreGive(ol_available_network_buffer);
         }
-        // wait for available network buffer
-        xSemaphoreTake(ol_available_network_buffer, portMAX_DELAY);
     }
     return NULL;
 }
 
-void ol_release_net_if_buffer(net_if_buffer_descriptor_t *buffer){
+BaseType_t ol_release_net_if_buffer(net_if_buffer_descriptor_t *buffer){
     //taskENTER_CRITICAL();
-    buffer->data_lenght = 0;
-    vPortFree(buffer->puc_link_buffer);
-    buffer->puc_link_buffer = NULL;
+    if (xSemaphoreTake(ol_network_buffer_mutex, RELEASE_NET_IF_BUFFER_TIMEOUT) == pdTRUE){
+        buffer->data_lenght = 0;
+        buffer->dst_addr = 0xFF;
+        vPortFree(buffer->puc_link_buffer);
+        buffer->puc_link_buffer = NULL;
+        xSemaphoreGive(ol_available_network_buffer);
+        xSemaphoreGive(ol_network_buffer_mutex);
+        return pdPASS;
+    }
+    return pdFAIL;
     //taskEXIT_CRITICAL();
 }
 
+BaseType_t ol_get_number_of_free_net_if_buffer(void){
+    return uxSemaphoreGetCount( ol_available_network_buffer );
+}
 
 uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if_buffer, uint32_t timeout){
     link_layer_header_t *link_frame = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
@@ -171,29 +196,34 @@ uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if
                 int len = lora_read_frame_size();
                 if (len >= (sizeof(link_layer_header_t) + sizeof(link_layer_trailer_t))) {
                     /* todo: analisar ol_get_net_if_buffer para o pacote de ack */
-                    net_if_buffer_descriptor_t *net_if_ack_buffer = ol_get_net_if_buffer((uint8_t)len);
-                    int x = lora_read_frame(net_if_ack_buffer->puc_link_buffer, net_if_ack_buffer->data_lenght);
-                    if (x){
-                        uint16_t crc = usLORACRC16(net_if_ack_buffer->puc_link_buffer, (net_if_ack_buffer->data_lenght - sizeof(link_layer_trailer_t)));
-                        //ESP_LOGI(OPEN_LORA_TAG, "calc ack: %x - packet acc: %x", crc, ack_packet.mac_ack_packet.crc);
-                        link_layer_header_t *link_ack_frame = (link_layer_header_t *)net_if_ack_buffer->puc_link_buffer;
-                        link_layer_trailer_t *link_ack_trailer = (link_layer_trailer_t *)&net_if_ack_buffer->puc_link_buffer[sizeof(link_layer_header_t)];
-                        if (link_ack_trailer->crc == crc) {
-                            if ((link_ack_frame->frame_type == ACK_FRAME) && (link_ack_frame->dst_addr == openlora.node_addr)){
-                                if ((link_ack_frame->seq_number == link_frame->seq_number) && (link_ack_frame->network_id == openlora.nwk_id)){
-                                    openlora.mac_seq_number++;
-                                    if (openlora.mac_seq_number >= 0xFE) {
-                                        openlora.mac_seq_number = 0;
+                    net_if_buffer_descriptor_t *net_if_ack_buffer = ol_get_net_if_buffer((uint8_t)len, MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS);
+                    if (net_if_ack_buffer != NULL) {
+                        int x = lora_read_frame(net_if_ack_buffer->puc_link_buffer, net_if_ack_buffer->data_lenght);
+                        if (x){
+                            uint16_t crc = usLORACRC16(net_if_ack_buffer->puc_link_buffer, (net_if_ack_buffer->data_lenght - sizeof(link_layer_trailer_t)));
+                            //ESP_LOGI(OPEN_LORA_TAG, "calc ack: %x - packet acc: %x", crc, ack_packet.mac_ack_packet.crc);
+                            link_layer_header_t *link_ack_frame = (link_layer_header_t *)net_if_ack_buffer->puc_link_buffer;
+                            link_layer_trailer_t *link_ack_trailer = (link_layer_trailer_t *)&net_if_ack_buffer->puc_link_buffer[sizeof(link_layer_header_t)];
+                            if (link_ack_trailer->crc == crc) {
+                                if ((link_ack_frame->frame_type == ACK_FRAME) && (link_ack_frame->dst_addr == openlora.node_addr)){
+                                    if ((link_ack_frame->seq_number == link_frame->seq_number) && (link_ack_frame->network_id == openlora.nwk_id)){
+                                        openlora.mac_seq_number++;
+                                        if (openlora.mac_seq_number >= 0xFE) {
+                                            openlora.mac_seq_number = 0;
+                                        }
+                                        // todo: analyze ol_release_net_if_buffer fail
+                                        (void)ol_release_net_if_buffer(net_if_ack_buffer);
+                                        return pdTRUE;
                                     }
-                                    ol_release_net_if_buffer(net_if_ack_buffer);
-                                    return pdTRUE;
                                 }
+                            }else {
+                                ESP_LOGI(OPEN_LORA_TAG, "ACK packet with wrong CRC");
                             }
-                        }else {
-                            ESP_LOGI(OPEN_LORA_TAG, "ACK packet with wrong CRC");
                         }
+                        (void)ol_release_net_if_buffer(net_if_ack_buffer);
+                    }else{
+                        ESP_LOGI(OPEN_LORA_TAG, "No free network buffer descritor to send ACK packet");
                     }
-                    ol_release_net_if_buffer(net_if_ack_buffer);
                 }
             }else {
                 ESP_LOGI(OPEN_LORA_TAG, "ACK packet timeout!");
@@ -212,59 +242,76 @@ uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if
 
 uint32_t ol_send_link_ack(net_if_buffer_descriptor_t *net_if_buffer, uint32_t timeout) {
     /* todo: analisar o ol_get_net_if_buffer para o ol_send_link_ack */
-    net_if_buffer_descriptor_t *net_if_ack_buffer = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t));
+    net_if_buffer_descriptor_t *net_if_ack_buffer = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t), MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS);
 
-    link_layer_header_t *link_frame = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
-    link_layer_header_t *link_ack_packet = (link_layer_header_t *)net_if_ack_buffer->puc_link_buffer;
+    if (net_if_ack_buffer != NULL){
+        link_layer_header_t *link_frame = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
+        link_layer_header_t *link_ack_packet = (link_layer_header_t *)net_if_ack_buffer->puc_link_buffer;
 
-    link_ack_packet->frame_type = ACK_FRAME;
-    link_ack_packet->network_id = link_frame->network_id;
-    link_ack_packet->dst_addr = link_frame->src_addr;
-    link_ack_packet->src_addr = openlora.node_addr;
-    link_ack_packet->seq_number = link_frame->seq_number;
-    link_ack_packet->payload_size = 0;
-    link_layer_trailer_t *link_ack_trailer = (link_layer_trailer_t *)&net_if_ack_buffer->puc_link_buffer[sizeof(link_layer_header_t)];
-    link_ack_trailer->crc = usLORACRC16(net_if_ack_buffer->puc_link_buffer, sizeof(link_layer_header_t));
+        link_ack_packet->frame_type = ACK_FRAME;
+        link_ack_packet->network_id = link_frame->network_id;
+        link_ack_packet->dst_addr = link_frame->src_addr;
+        link_ack_packet->src_addr = openlora.node_addr;
+        link_ack_packet->seq_number = link_frame->seq_number;
+        link_ack_packet->payload_size = 0;
+        link_layer_trailer_t *link_ack_trailer = (link_layer_trailer_t *)&net_if_ack_buffer->puc_link_buffer[sizeof(link_layer_header_t)];
+        link_ack_trailer->crc = usLORACRC16(net_if_ack_buffer->puc_link_buffer, sizeof(link_layer_header_t));
 
-    uint32_t ret = lora_send_frame(net_if_ack_buffer->puc_link_buffer, net_if_ack_buffer->data_lenght, timeout);
-    ol_release_net_if_buffer(net_if_ack_buffer);
-    return ret;
+        uint32_t ret = lora_send_frame(net_if_ack_buffer->puc_link_buffer, net_if_ack_buffer->data_lenght, timeout);
+        // todo: analyze ol_release_net_if_buffer fail
+        (void)ol_release_net_if_buffer(net_if_ack_buffer);
+        return ret;
+    }
+    return pdFAIL;
 }
 
 void ol_receive_link_frame(uint32_t timeout){
     if (lora_received(timeout) == pdTRUE) {
         int len = lora_read_frame_size();
         /* todo: analisar o ol_get_net_if_buffer em ol_receive_link_frame */
-        net_if_buffer_descriptor_t *net_if_buffer = ol_get_net_if_buffer((uint8_t)len);
-        int x = lora_read_frame(net_if_buffer->puc_link_buffer, net_if_buffer->data_lenght);
-        if (x) {
-            link_layer_header_t *link_frame_header = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
-            link_layer_trailer_t *link_frame_trailer = (link_layer_trailer_t *)&net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+link_frame_header->payload_size];
-            uint16_t crc = usLORACRC16(net_if_buffer->puc_link_buffer, (net_if_buffer->data_lenght - sizeof(link_layer_trailer_t)));
-            if (link_frame_trailer->crc == crc) {
-                if ((link_frame_header->frame_type == DATA_FRAME) && (link_frame_header->network_id == openlora.nwk_id) && (link_frame_header->dst_addr == openlora.node_addr)) {
-                    (void)ol_send_link_ack(net_if_buffer, LINK_ACK_TIMEOUT);
-                    if (openlora.neigh_seq_number[link_frame_header->src_addr] != link_frame_header->seq_number) {
-                        openlora.neigh_seq_number[link_frame_header->src_addr] = link_frame_header->seq_number;
-                        if (xQueueSendToBack(rx_link_layer_queue, &net_if_buffer, timeout) == pdTRUE) {
-                            ESP_LOGI(OPEN_LORA_TAG, "link frame sent to the upper layer");
-                        }else {
-                            ESP_LOGI(OPEN_LORA_TAG, "full upper layer queue");
-                            ol_release_net_if_buffer(net_if_buffer);
+        net_if_buffer_descriptor_t *net_if_buffer = ol_get_net_if_buffer((uint8_t)len, MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS);
+        if (net_if_buffer != NULL){
+            int x = lora_read_frame(net_if_buffer->puc_link_buffer, net_if_buffer->data_lenght);
+            if (x) {
+                link_layer_header_t *link_frame_header = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
+                link_layer_trailer_t *link_frame_trailer = (link_layer_trailer_t *)&net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+link_frame_header->payload_size];
+                uint16_t crc = usLORACRC16(net_if_buffer->puc_link_buffer, (net_if_buffer->data_lenght - sizeof(link_layer_trailer_t)));
+                if (link_frame_trailer->crc == crc) {
+                    if ((link_frame_header->frame_type == DATA_FRAME) && (link_frame_header->network_id == openlora.nwk_id) && (link_frame_header->dst_addr == openlora.node_addr)) {
+                        if (ol_send_link_ack(net_if_buffer, LINK_ACK_TIMEOUT) == pdTRUE) {
+                            if (openlora.neigh_seq_number[link_frame_header->src_addr] != link_frame_header->seq_number) {
+                                openlora.neigh_seq_number[link_frame_header->src_addr] = link_frame_header->seq_number;
+                                if (xQueueSendToBack(rx_link_layer_queue, &net_if_buffer, timeout) == pdTRUE) {
+                                    ESP_LOGI(OPEN_LORA_TAG, "link frame sent to the upper layer");
+                                }else {
+                                    ESP_LOGI(OPEN_LORA_TAG, "full upper layer queue");
+                                    // todo: analyze ol_release_net_if_buffer fail
+                                    (void)ol_release_net_if_buffer(net_if_buffer);
+                                }
+                            }
+                        }else{
+                            ESP_LOGI(OPEN_LORA_TAG, "No free buffer descriptor to send ack packet");
+                            // todo: analyze ol_release_net_if_buffer fail
+                            (void)ol_release_net_if_buffer(net_if_buffer);
                         }
+                    }else {
+                        /* todo: Testar se o pacote é broadcast */
+                        // todo: analyze ol_release_net_if_buffer fail
+                        (void)ol_release_net_if_buffer(net_if_buffer);
+                        ESP_LOGI(OPEN_LORA_TAG, "not the link frame destination");
                     }
                 }else {
-                    /* todo: Testar se o pacote é broadcast */
-                    ESP_LOGI(OPEN_LORA_TAG, "not the link frame destination");
-                    ol_release_net_if_buffer(net_if_buffer);
+                    // todo: analyze ol_release_net_if_buffer fail
+                    (void)ol_release_net_if_buffer(net_if_buffer);
+                    ESP_LOGI(OPEN_LORA_TAG, "link frame with wrong CRC");
                 }
             }else {
-                ol_release_net_if_buffer(net_if_buffer);
-                ESP_LOGI(OPEN_LORA_TAG, "link frame with wrong CRC");
+                // todo: analyze ol_release_net_if_buffer fail
+                (void)ol_release_net_if_buffer(net_if_buffer);
+                ESP_LOGI(OPEN_LORA_TAG, "zero size link frame");
             }
-        }else {
-            ol_release_net_if_buffer(net_if_buffer);
-            ESP_LOGI(OPEN_LORA_TAG, "zero size link frame");
+        }else{
+            ESP_LOGI(OPEN_LORA_TAG, "No free network buffer descriptor!");
         }
     }
 }
@@ -293,11 +340,13 @@ void ol_link_layer_task(void *arg) {
     /* Create the queues and semaphores that will be contained in the set. */
     tx_link_layer_queue = xQueueCreate( LINK_LAYER_QUEUE, sizeof(net_if_buffer_descriptor_t *));
     rx_link_layer_queue = xQueueCreate( LINK_LAYER_QUEUE, sizeof(net_if_buffer_descriptor_t *));
+    link_layer_tx_ready_signal = xSemaphoreCreateBinary();
 
     /* Check everything was created. */
     configASSERT( link_event );
     configASSERT( tx_link_layer_queue );
     configASSERT( rx_link_layer_queue );
+    configASSERT( link_layer_tx_ready_signal );
 
     /* Add the queues and semaphores to the set.  Reading from these queues and
     semaphore can only be performed after a call to xQueueSelectFromSet() has
@@ -316,11 +365,21 @@ void ol_link_layer_task(void *arg) {
         if( xActivatedMember == tx_link_layer_queue ){
             // Transmitt a frame
             net_if_buffer_descriptor_t *frame;
+            bool is_queue_full = false;
+            static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
+            taskENTER_CRITICAL(&spinlock);
+            if (xQueueIsQueueFullFromISR(tx_link_layer_queue)){
+                is_queue_full = true;
+            }
+            taskEXIT_CRITICAL(&spinlock);
             xQueueReceive( xActivatedMember, &frame, portMAX_DELAY);
 
-            (void)ol_send_link_frame(OL_BORDER_ROUTER_ADDR, frame, portMAX_DELAY);
-            ol_release_net_if_buffer(frame);
-
+            (void)ol_send_link_frame(frame->dst_addr, frame, portMAX_DELAY);
+            // todo: analyze ol_release_net_if_buffer fail
+            (void)ol_release_net_if_buffer(frame);
+            if (is_queue_full) {
+                xSemaphoreGive(link_layer_tx_ready_signal);
+            }
         }else if( xActivatedMember == sem_radio ){
             // Receive a frame
             ol_receive_link_frame(10);
@@ -368,11 +427,52 @@ void ol_transp_remove_client_or_server(transport_layer_t *client_server) {
 	}
 }
 
+BaseType_t ol_transp_layer_receive_packet(net_if_buffer_descriptor_t *packet){
+    // analyze the transport layer header
+    // analisar o protocolo
+    // varrer a lista de objetos da camada de transporte
+    if (packet != NULL) {
+        transport_layer_t *server_client = transp_list_head;
+        while(server_client != NULL) {
+            // is there a src port listening/waiting for this destination port?
+            /*ESP_LOGI(OPEN_LORA_TAG, "Received packet:\n\r");
+            for(int i=0; i<packet->data_lenght; i++){
+                ESP_LOGI(OPEN_LORA_TAG, "%d ", packet->puc_link_buffer[i]);
+            }*/
+            //link_layer_header_t *link_frame_header = (link_layer_header_t *)packet->puc_link_buffer;
+            transport_layer_header_t *transp_packet_header = (transport_layer_header_t *)&packet->puc_link_buffer[sizeof(link_layer_header_t)];
+            if (server_client->src_port == transp_packet_header->dst_port) {
+                server_client->payload_size = transp_packet_header->payload_size;
+                server_client->sender_port = transp_packet_header->src_port;
+                //server_client->sender_addr = link_frame_header->src_addr;
+                ESP_LOGI(OPEN_LORA_TAG, "Wake up destination task!");
+                xQueueSendToBack(server_client->transp_wakeup, &packet, 0);
+                return pdPASS;
+            }
+            server_client = server_client->next;
+        }
+        ESP_LOGI(OPEN_LORA_TAG, "No upper layer waiting for this packet!");
+        // todo: analyze ol_release_net_if_buffer fail
+        (void)ol_release_net_if_buffer(packet);
+    }else {
+        ESP_LOGI(OPEN_LORA_TAG, "Can't get the network buffer from the lower layer!");
+    }
+    return pdFAIL;
+}
+
+BaseType_t ol_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
+    return xQueueSendToBack(tx_transp_layer_queue, &buffer, timeout);
+}
+
+BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
+    return xQueueReceive(rx_transp_layer_queue, buffer, timeout);
+}
+
 void ol_transport_layer_task(void *arg) {
     // esperar pacotes das camadas superiores (em geral, aplicação)
     // encaminha pacotes da camada de rede e/ou enlace para as tasks usando a camada de transporte
     // opcional transmitir um pacote (retentativas, ack, ...)
-    static const char *TAG = "ol_transport_layer";
+    //static const char *TAG = "ol_transport_layer";
 
     /* Create the queue set large enough to hold an event for every space in
     every queue and semaphore that is to be added to the set. */
@@ -395,6 +495,7 @@ void ol_transport_layer_task(void *arg) {
     returned the queue or semaphore handle from this point on. */
     xQueueAddToSet( tx_transp_layer_queue, transp_event );
     xQueueAddToSet( rx_link_layer_queue, transp_event );
+    xQueueAddToSet(link_layer_tx_ready_signal, transp_event);
     while(1) {
         /* Block to wait for something to be available from the queues or
         semaphore that have been added to the set. */
@@ -402,55 +503,40 @@ void ol_transport_layer_task(void *arg) {
 
         if( xActivatedMember == tx_transp_layer_queue ){
             // Transmit a transport segment or datagram to link layer
-            net_if_buffer_descriptor_t *packet;
-            xQueueReceive( xActivatedMember, &packet, portMAX_DELAY);
+            net_if_buffer_descriptor_t *datagram = NULL;
+            xQueueReceive( xActivatedMember, &datagram, 0);
 
-            // add the transport layer header
-
+            // the transport layer header where added by the transport layer interface
             // send to lower layer
-
+            if (datagram != NULL){
+                if (ol_to_link_layer(datagram, 10) != pdTRUE){
+                    xQueueRemoveFromSet(xActivatedMember, transp_event);
+                    xQueueSendToFront(tx_transp_layer_queue, datagram, 10);
+                }
+            }
         }else if( xActivatedMember == rx_link_layer_queue ){
             // from link layer
-            net_if_buffer_descriptor_t *packet;
-            xQueueReceive( xActivatedMember, &packet, portMAX_DELAY);
-
-            // analyze the transport layer header
-            // analisar o protocolo
-            // varrer a lista de objetos da camada de transporte
-            transport_layer_t *server_client = transp_list_head;
-            while(server_client != NULL) {
-                // analisar se a porta de destino do header do pacote bate com algum objeto na lista
-                //if (server_client->dst_addr == packet dst port) {
-
-                //}
-                server_client = server_client->next;
-            }
-
+            net_if_buffer_descriptor_t *packet = NULL;
+            xQueueReceive( xActivatedMember, &packet, 0);
+            (void)ol_transp_layer_receive_packet(packet);
+        }else if ( xActivatedMember == link_layer_tx_ready_signal ){
+            xSemaphoreTake(xActivatedMember, 0);
+            xQueueAddToSet( tx_transp_layer_queue, transp_event );
         }
-
     }
 }
 
 
-int ol_transp_listen(transport_layer_t *server){
-	ol_transp_include_client_or_server(server);
-    //Create a semaphore
-    server->transp_wakeup = xSemaphoreCreateBinary();
-    if (server->transp_wakeup != NULL){
+int ol_transp_open(transport_layer_t *client_server){
+	ol_transp_include_client_or_server(client_server);
+    //Create a queue
+    client_server->transp_wakeup = xQueueCreate(1, sizeof(net_if_buffer_descriptor_t *));
+    if (client_server->transp_wakeup != NULL){
 	    return pdPASS;
     }
     return pdFAIL;
 }
 
-int ol_transp_connect(transport_layer_t *client){
-	ol_transp_include_client_or_server(client);
-    //Create a semaphore
-    client->transp_wakeup = xSemaphoreCreateBinary();
-    if (client->transp_wakeup != NULL){
-	    return pdPASS;
-    }
-    return pdFAIL;
-}
 
 int ol_transp_close(transport_layer_t *server_client){
 	ol_transp_remove_client_or_server(server_client);
@@ -459,17 +545,49 @@ int ol_transp_close(transport_layer_t *server_client){
 	return 0;
 }
 
-int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, uint32_t timeout){
+int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t timeout){
     // Wait for the semaphore
-    if (xSemaphoreTake(server_client->transp_wakeup, timeout) == pdTRUE){
-        // something was received
-
+    net_if_buffer_descriptor_t *datagram = NULL;
+    if (xQueueReceive(server_client->transp_wakeup, &datagram, timeout) == pdTRUE){
+        // something was receive
+        transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)];
+        uint8_t *payload = &datagram->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
+        memcpy(buffer, payload,transp_header->payload_size);
+        return transp_header->payload_size;
     }
 	return pdFAIL;
 }
 
 
-int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint8_t length){
+int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint8_t length, TickType_t timeout){
     // send a transport layer segment/datagram
-    return 0;
+    // todo: verificar a quantidade de net if buffers antes de tentar enviar
+    int ret = pdFAIL;
+    int retries = 3;
+    do {
+        BaseType_t free_net_buffers = ol_get_number_of_free_net_if_buffer();    
+        if (free_net_buffers >= MIN_NUMBER_OF_NET_IF_DESCRIPTORS) {
+            net_if_buffer_descriptor_t *datagram  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+sizeof(transport_layer_header_t)+length, timeout);
+            transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)];
+            uint8_t *payload = (uint8_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
+            transp_header->src_port = server_client->src_port;
+            transp_header->dst_port = server_client->dst_port;
+            transp_header->payload_size = length;
+            datagram->dst_addr = server_client->dst_addr;
+            memcpy(payload, buffer, length);
+            /*
+            ESP_LOGI(OPEN_LORA_TAG, "Transmitted packet:\n\r");
+            for(int i=0; i<21; i++){
+                ESP_LOGI(OPEN_LORA_TAG, "%d ", datagram->puc_link_buffer[i]);
+            }
+            */
+            ol_to_transport_layer(datagram, timeout);
+            ret = length;
+            break;
+        }else {
+            retries--;
+            vTaskDelay(timeout/3);
+        }
+    }while(retries > 0);
+    return ret;
 }

@@ -149,14 +149,26 @@ void lora_transmit_task(void *param) {
     static const char *TAG = "lora_tx";
     uint16_t cnt = 0;
     char buffer[16];
-
+    transport_layer_t client;
+    client.src_port = TRANSPORT_CLIENT_PORT_INIT+1;
+	client.dst_port = 1;
+    client.dst_addr = OL_BORDER_ROUTER_ADDR;
+    int ret = ol_transp_open(&client);
+    if (ret == pdFAIL) {
+        ESP_LOGI(TAG, "It was not possible to connect to the %d port", client.dst_port );
+        vTaskSuspend(NULL);
+    }
     while(1) {
         int len = sprintf(buffer, "Teste: %d\n", cnt++);
-        net_if_buffer_descriptor_t *packet  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+len);
+        ESP_LOGI(TAG, "Destination addr: %d, Source port: %d, Destination port: %d", client.dst_addr, client.src_port, client.dst_port);
+        ol_transp_send(&client, (uint8_t *)buffer, len, portMAX_DELAY);
+        /*
+        net_if_buffer_descriptor_t *packet  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+len, 100);
         if (packet != NULL) {
             memcpy(&packet->puc_link_buffer[sizeof(link_layer_header_t)], buffer, len+1);
             ol_to_link_layer(packet, portMAX_DELAY);
         }
+        */
         #if 0
         int len = sprintf(buffer, "Teste: %d\n", cnt++);
         if (lora_send_frame((uint8_t *)buffer, len, 1000) == pdTRUE) {
@@ -174,13 +186,30 @@ void lora_receive_task(void *param) {
     (void)param;
     static const char *TAG = "lora_rx";
     char buffer[16];
+    transport_layer_t server;
+    server.src_port = 1;
+	server.dst_port = TRANSPORT_CLIENT_PORT_INIT+1;
+    int ret = ol_transp_open(&server);
+    if (ret == pdFAIL) {
+        ESP_LOGI(TAG, "It was not possible to listen the %d port", server.src_port );
+        vTaskSuspend(NULL);
+    }
     while(1) {
+        memset(buffer, 0, 16);
+        int len = ol_transp_recv(&server, (uint8_t *)buffer, portMAX_DELAY);
+        if (len > 0){
+            ESP_LOGI(TAG, "Size: %d - %s", len, buffer);
+        }else {
+            ESP_LOGI(TAG, "Reception timeout!");
+        }
+        /*
         lora_receive();
         lora_received(portMAX_DELAY);
         memset(buffer, 0, 16);
         int len = lora_read_frame_size();
         lora_read_frame((uint8_t *)buffer, 16);
         ESP_LOGI(TAG, "Size: %d - %s", len, buffer);
+        */
     }
 }
 
@@ -209,21 +238,19 @@ void app_main()
    if (lora_init(4, CHANNEL_0, 20, true, true, true)) {
         // init openlora stack
         #if MODE == RECEIVER
-        ol_init(1, OL_BORDER_ROUTER_ADDR);
+        if (ol_init(1, OL_BORDER_ROUTER_ADDR) == pdTRUE){
+            xTaskCreate(lora_receive_task, "task_lora_tx", 2048, NULL, 4, NULL);
+        }
         #else
-        ol_init(1, 1);
+        if (ol_init(1, 1) == pdTRUE) {
+            xTaskCreate(lora_transmit_task, "task_lora_tx", 2048, NULL, 4, NULL);
+        }
         #endif
    }
 
-   #if MODE ==  TRANSMITTER
-   xTaskCreate(lora_transmit_task, "task_lora_tx", 2048, NULL, 4, NULL);
-   #endif
-   // Tarefa OLED
-   #if MODE == RECEIVER
-   //xTaskCreate(lora_receive_task, "task_lora_tx", 2048, NULL, 4, NULL);
    #if HAVE_OLED == 1
+    // Tarefa OLED
    xTaskCreate(&task_test_SSD1306i2c, "task_oled", 10*1024, NULL, 4, NULL);
-   #endif
    #endif
 
    // Tarefa cartão SD
