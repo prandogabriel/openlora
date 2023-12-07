@@ -1,5 +1,4 @@
 
-#define LORA_MAX_PAYLOAD_SIZE               255
 #define NUMBER_OF_NET_IF_DESCRIPTORS        64
 #define MIN_NUMBER_OF_NET_IF_DESCRIPTORS    (NUMBER_OF_NET_IF_DESCRIPTORS / 2)
 #define MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS 100
@@ -18,7 +17,8 @@
 /* The maximum back-off delay (in milliseconds) for between retries in the example. */
 #define RETRY_MAX_BACKOFF_DELAY_MS      ( RETRY_BACKOFF_BASE_MS*4U )
 
-#define TRANSPORT_CLIENT_PORT_INIT         0x80
+#define OL_TRANSPORT_CLIENT_PORT_INIT         0x80
+#define OL_TRANSPORT_MAX_PAYLOAD_SIZE         216 // excludes the protocol headers and trailers
 
 typedef struct openlora_t_ {
     uint8_t  nwk_id;
@@ -34,9 +34,10 @@ typedef struct openlora_t_ {
 
 typedef struct
 {
-	uint8_t *puc_link_buffer; 	    /* Pointer to the start of the link frame. */
-	uint8_t  data_lenght; 			/* Holds the total frame length */
-    uint8_t  dst_addr;
+	uint8_t         *puc_link_buffer; 	    /* Pointer to the start of the link frame. */
+    QueueHandle_t   packet_ack;
+	uint8_t         data_lenght; 			/* Holds the total frame length */
+    uint8_t         dst_addr;
 } net_if_buffer_descriptor_t;
 
 typedef enum __attribute__((packed)) {
@@ -80,6 +81,7 @@ struct transp_layer_s{
     uint8_t                 dst_addr;
     uint8_t                 src_addr;
     QueueHandle_t           transp_wakeup;
+    QueueHandle_t           transp_ack;
     uint8_t                 sender_port;
     uint8_t                 sender_addr;
     uint8_t                 payload_size;
@@ -92,7 +94,7 @@ typedef struct transp_layer_s transport_layer_t;
 
 typedef enum __attribute__((packed)) {
     TRANSP_DATAGRAM = 1,
-    TRANSP_SEGMENT
+    TRANSP_STREAM
 }transp_protocol_type_t;
 
 typedef struct __attribute__((packed, aligned(1))) {

@@ -29,18 +29,18 @@ static const char *OPEN_LORA_TAG = "lora_tx";
 
 /* Define the size of the item to be held by queue 1 and queue 2 respectively.
 The values used here are just for demonstration purposes. */
-#define LINK_LAYER_QUEUE    16
+#define LINK_LAYER_QUEUE_LENGTH         16
 
 /* Binary semaphores have an effective length of 1. */
-#define BINARY_SEMAPHORE_LENGTH	1
+#define BINARY_SEMAPHORE_LENGTH	        1
 
-#define TRANSP_LAYER_QUEUE_TX    16
-#define TRANSP_LAYER_QUEUE_RX    16
+#define TRANSP_LAYER_QUEUE_TX_LENGTH    16
+#define TRANSP_LAYER_QUEUE_RX_LENGTH    16
 
 /* The combined length of the two queues and binary semaphore that will be
 added to the queue set. */
-#define COMBINED_LENGTH_LINK ( LINK_LAYER_QUEUE + BINARY_SEMAPHORE_LENGTH )
-#define COMBINED_LENGTH_TRANSP ( TRANSP_LAYER_QUEUE_TX + LINK_LAYER_QUEUE + BINARY_SEMAPHORE_LENGTH)
+#define COMBINED_LENGTH_LINK ( LINK_LAYER_QUEUE_LENGTH + BINARY_SEMAPHORE_LENGTH )
+#define COMBINED_LENGTH_TRANSP ( TRANSP_LAYER_QUEUE_TX_LENGTH + LINK_LAYER_QUEUE_LENGTH + BINARY_SEMAPHORE_LENGTH)
 
 static SemaphoreHandle_t ol_available_network_buffer = NULL;
 static SemaphoreHandle_t ol_network_buffer_mutex = NULL;
@@ -56,6 +56,7 @@ static QueueHandle_t        rx_transp_layer_queue;
 BaseType_t ol_init_net_if_buffers(void){
     for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
         net_if_buffer_descriptors[i].puc_link_buffer = NULL;
+        net_if_buffer_descriptors[i].packet_ack = NULL;
         net_if_buffer_descriptors[i].data_lenght = 0;
         net_if_buffer_descriptors[i].dst_addr = 0xFF;
     }
@@ -120,6 +121,9 @@ BaseType_t ol_release_net_if_buffer(net_if_buffer_descriptor_t *buffer){
         buffer->data_lenght = 0;
         buffer->dst_addr = 0xFF;
         vPortFree(buffer->puc_link_buffer);
+        if (buffer->packet_ack != NULL){
+            buffer->packet_ack = NULL;
+        }
         buffer->puc_link_buffer = NULL;
         xSemaphoreGive(ol_available_network_buffer);
         xSemaphoreGive(ol_network_buffer_mutex);
@@ -186,7 +190,8 @@ uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if
             return pdFALSE;
         }
 
-        ESP_LOGI(OPEN_LORA_TAG, "Transmitting an ol frame: %s", net_if_buffer->puc_link_buffer);
+        //ESP_LOGI(OPEN_LORA_TAG, "Transmitting an ol frame with %d bytes: %s", net_if_buffer->data_lenght, &net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)]);
+        ESP_LOGI(OPEN_LORA_TAG, "Transmitting an ol frame with %d bytes", net_if_buffer->data_lenght);
         uint32_t ret = lora_send_frame(net_if_buffer->puc_link_buffer, net_if_buffer->data_lenght, timeout);
         if (ret == pdTRUE) {
             // wait for the ack
@@ -228,6 +233,8 @@ uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if
             }else {
                 ESP_LOGI(OPEN_LORA_TAG, "ACK packet timeout!");
             }
+        }else {
+            ESP_LOGI(OPEN_LORA_TAG, "Fail to sent the frame to the radio");
         }
         link_retries++;
     }while(link_retries < LINK_RETRIES);
@@ -328,7 +335,8 @@ void ol_link_layer_task(void *arg) {
     // esperar pacotes das camadas superiores
     // chegou um pacote do radio
     // transmitir um pacote (cca, csma/ca, retentativas, ack, ...)
-    //static const char *TAG = "ol_link_layer";
+    static const char *TAG = "ol_link_layer";
+    bool is_queue_full = false;
 
     /* Create the queue set large enough to hold an event for every space in
     every queue and semaphore that is to be added to the set. */
@@ -338,8 +346,8 @@ void ol_link_layer_task(void *arg) {
     link_event = xQueueCreateSet( COMBINED_LENGTH_LINK );
 
     /* Create the queues and semaphores that will be contained in the set. */
-    tx_link_layer_queue = xQueueCreate( LINK_LAYER_QUEUE, sizeof(net_if_buffer_descriptor_t *));
-    rx_link_layer_queue = xQueueCreate( LINK_LAYER_QUEUE, sizeof(net_if_buffer_descriptor_t *));
+    tx_link_layer_queue = xQueueCreate( LINK_LAYER_QUEUE_LENGTH, sizeof(net_if_buffer_descriptor_t *));
+    rx_link_layer_queue = xQueueCreate( LINK_LAYER_QUEUE_LENGTH, sizeof(net_if_buffer_descriptor_t *));
     link_layer_tx_ready_signal = xSemaphoreCreateBinary();
 
     /* Check everything was created. */
@@ -365,19 +373,30 @@ void ol_link_layer_task(void *arg) {
         if( xActivatedMember == tx_link_layer_queue ){
             // Transmitt a frame
             net_if_buffer_descriptor_t *frame;
-            bool is_queue_full = false;
-            static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
-            taskENTER_CRITICAL(&spinlock);
-            if (xQueueIsQueueFullFromISR(tx_link_layer_queue)){
+            BaseType_t space = uxQueueSpacesAvailable(tx_link_layer_queue);
+            ESP_LOGI(TAG, "Available space in the link layer RX queue: %d", space);
+            if (space == 0){
                 is_queue_full = true;
             }
-            taskEXIT_CRITICAL(&spinlock);
             xQueueReceive( xActivatedMember, &frame, portMAX_DELAY);
 
-            (void)ol_send_link_frame(frame->dst_addr, frame, portMAX_DELAY);
+            uint8_t len = 0;
+            if (ol_send_link_frame(frame->dst_addr, frame, portMAX_DELAY) != pdTRUE) {
+                if (frame->packet_ack != NULL){
+                    xQueueSendToBack(frame->packet_ack, &len, 10);
+                }
+                ESP_LOGI(TAG, "Fail to sent the frame to the radio!");
+            }else {
+                if (frame->packet_ack != NULL){
+                    uint8_t len = frame->data_lenght - sizeof(link_layer_header_t) -sizeof(link_layer_trailer_t) - sizeof(transport_layer_header_t);
+                    xQueueSendToBack(frame->packet_ack, &len, 10);
+                }
+            }
             // todo: analyze ol_release_net_if_buffer fail
             (void)ol_release_net_if_buffer(frame);
-            if (is_queue_full) {
+            if (is_queue_full && (uxQueueSpacesAvailable(tx_link_layer_queue) >= (LINK_LAYER_QUEUE_LENGTH/2))) {
+                is_queue_full = false;
+                ESP_LOGI(TAG, "Re-enabled the send of network buffers to the link layer!");
                 xSemaphoreGive(link_layer_tx_ready_signal);
             }
         }else if( xActivatedMember == sem_radio ){
@@ -472,7 +491,7 @@ void ol_transport_layer_task(void *arg) {
     // esperar pacotes das camadas superiores (em geral, aplicação)
     // encaminha pacotes da camada de rede e/ou enlace para as tasks usando a camada de transporte
     // opcional transmitir um pacote (retentativas, ack, ...)
-    //static const char *TAG = "ol_transport_layer";
+    static const char *TAG = "ol_transport_layer";
 
     /* Create the queue set large enough to hold an event for every space in
     every queue and semaphore that is to be added to the set. */
@@ -482,8 +501,8 @@ void ol_transport_layer_task(void *arg) {
     transp_event = xQueueCreateSet( COMBINED_LENGTH_TRANSP );
 
     /* Create the queues and semaphores that will be contained in the set. */
-    tx_transp_layer_queue = xQueueCreate( TRANSP_LAYER_QUEUE_TX, sizeof(net_if_buffer_descriptor_t *));
-    rx_transp_layer_queue = xQueueCreate( TRANSP_LAYER_QUEUE_RX, sizeof(net_if_buffer_descriptor_t *));
+    tx_transp_layer_queue = xQueueCreate( TRANSP_LAYER_QUEUE_TX_LENGTH, sizeof(net_if_buffer_descriptor_t *));
+    rx_transp_layer_queue = xQueueCreate( TRANSP_LAYER_QUEUE_RX_LENGTH, sizeof(net_if_buffer_descriptor_t *));
 
     /* Check everything was created. */
     configASSERT( transp_event );
@@ -511,6 +530,7 @@ void ol_transport_layer_task(void *arg) {
             if (datagram != NULL){
                 if (ol_to_link_layer(datagram, 10) != pdTRUE){
                     xQueueRemoveFromSet(xActivatedMember, transp_event);
+                    ESP_LOGI(TAG, "Stop to send network buffers to the link layer!");
                     xQueueSendToFront(tx_transp_layer_queue, datagram, 10);
                 }
             }
@@ -521,6 +541,7 @@ void ol_transport_layer_task(void *arg) {
             (void)ol_transp_layer_receive_packet(packet);
         }else if ( xActivatedMember == link_layer_tx_ready_signal ){
             xSemaphoreTake(xActivatedMember, 0);
+            ESP_LOGI(TAG, "Re-enabled the send of network buffers to the link layer!");
             xQueueAddToSet( tx_transp_layer_queue, transp_event );
         }
     }
@@ -531,8 +552,15 @@ int ol_transp_open(transport_layer_t *client_server){
 	ol_transp_include_client_or_server(client_server);
     //Create a queue
     client_server->transp_wakeup = xQueueCreate(1, sizeof(net_if_buffer_descriptor_t *));
-    if (client_server->transp_wakeup != NULL){
-	    return pdPASS;
+    if (client_server->protocol == TRANSP_STREAM) {
+        client_server->transp_ack = xQueueCreate(1, sizeof(uint8_t));
+        if ((client_server->transp_wakeup != NULL) && (client_server->transp_ack != NULL)){
+            return pdPASS;
+        }
+    }else {
+        if (client_server->transp_wakeup != NULL){
+            return pdPASS;
+        }
     }
     return pdFAIL;
 }
@@ -541,7 +569,8 @@ int ol_transp_open(transport_layer_t *client_server){
 int ol_transp_close(transport_layer_t *server_client){
 	ol_transp_remove_client_or_server(server_client);
 	// Delete the server/client semaphore
-    vSemaphoreDelete(server_client->transp_wakeup);
+    vQueueDelete(server_client->transp_wakeup);
+    vQueueDelete(server_client->transp_ack);
 	return 0;
 }
 
@@ -562,32 +591,74 @@ int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t
 int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint8_t length, TickType_t timeout){
     // send a transport layer segment/datagram
     // todo: verificar a quantidade de net if buffers antes de tentar enviar
-    int ret = pdFAIL;
-    int retries = 3;
-    do {
-        BaseType_t free_net_buffers = ol_get_number_of_free_net_if_buffer();    
-        if (free_net_buffers >= MIN_NUMBER_OF_NET_IF_DESCRIPTORS) {
-            net_if_buffer_descriptor_t *datagram  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+sizeof(transport_layer_header_t)+length, timeout);
-            transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)];
-            uint8_t *payload = (uint8_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
-            transp_header->src_port = server_client->src_port;
-            transp_header->dst_port = server_client->dst_port;
-            transp_header->payload_size = length;
-            datagram->dst_addr = server_client->dst_addr;
-            memcpy(payload, buffer, length);
-            /*
-            ESP_LOGI(OPEN_LORA_TAG, "Transmitted packet:\n\r");
-            for(int i=0; i<21; i++){
-                ESP_LOGI(OPEN_LORA_TAG, "%d ", datagram->puc_link_buffer[i]);
-            }
-            */
-            ol_to_transport_layer(datagram, timeout);
-            ret = length;
-            break;
-        }else {
-            retries--;
-            vTaskDelay(timeout/3);
+    int ret = 0;
+
+    if (server_client->protocol == TRANSP_DATAGRAM){
+        if (length <= OL_TRANSPORT_MAX_PAYLOAD_SIZE){
+            int retries = 3;
+            do {
+                BaseType_t free_net_buffers = ol_get_number_of_free_net_if_buffer();    
+                if (free_net_buffers >= MIN_NUMBER_OF_NET_IF_DESCRIPTORS) {
+                    net_if_buffer_descriptor_t *datagram  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+sizeof(transport_layer_header_t)+length, timeout);
+                    transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)];
+                    uint8_t *payload = (uint8_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
+                    transp_header->src_port = server_client->src_port;
+                    transp_header->dst_port = server_client->dst_port;
+                    transp_header->payload_size = length;
+                    transp_header->protocol = server_client->protocol;
+                    datagram->dst_addr = server_client->dst_addr;
+                    memcpy(payload, buffer, length);
+                    /*
+                    ESP_LOGI(OPEN_LORA_TAG, "Transmitted packet:\n\r");
+                    for(int i=0; i<21; i++){
+                        ESP_LOGI(OPEN_LORA_TAG, "%d ", datagram->puc_link_buffer[i]);
+                    }
+                    */
+                    ol_to_transport_layer(datagram, timeout);
+                    ret = length;
+                    break;
+                }else {
+                    retries--;
+                    vTaskDelay(timeout/3);
+                }
+            }while(retries > 0);
         }
-    }while(retries > 0);
+    }else if (server_client->protocol == TRANSP_STREAM){
+        int retries = 3;
+        do {
+            BaseType_t free_net_buffers = ol_get_number_of_free_net_if_buffer();
+            if (free_net_buffers >= MIN_NUMBER_OF_NET_IF_DESCRIPTORS) {
+                net_if_buffer_descriptor_t *segment  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+sizeof(transport_layer_header_t)+length, timeout);
+                transport_layer_header_t *transp_header = (transport_layer_header_t *)&segment->puc_link_buffer[sizeof(link_layer_header_t)];
+                uint8_t *payload = (uint8_t *)&segment->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
+                transp_header->src_port = server_client->src_port;
+                transp_header->dst_port = server_client->dst_port;
+                transp_header->payload_size = length;
+                transp_header->protocol = server_client->protocol;
+                segment->dst_addr = server_client->dst_addr;
+                memcpy(payload, buffer, length);
+                /*
+                ESP_LOGI(OPEN_LORA_TAG, "Transmitted packet:\n\r");
+                for(int i=0; i<21; i++){
+                    ESP_LOGI(OPEN_LORA_TAG, "%d ", datagram->puc_link_buffer[i]);
+                }
+                */
+                segment->packet_ack = server_client->transp_ack;
+                ol_to_transport_layer(segment, timeout);
+
+                // Wait for confirmation of the delivered package or error
+                uint8_t len = 0;
+                xQueueReceive(server_client->transp_ack, &len, timeout);
+                ESP_LOGI(OPEN_LORA_TAG, "Len: %d - lenght: %d", len, length);
+                if (len == length){
+                    ret = length;
+                }
+                break;
+            }else {
+                retries--;
+                vTaskDelay(timeout/3);
+            }
+        }while(retries > 0);
+    }
     return ret;
 }

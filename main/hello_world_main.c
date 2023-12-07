@@ -35,7 +35,7 @@
 
 #define TRANSMITTER 1
 #define RECEIVER    2
-#define MODE RECEIVER
+#define MODE TRANSMITTER
 
 
 #define BOARD_V1        1
@@ -43,7 +43,7 @@
 #define BOARD_V2_16     3
 #define BOARD_TTGO_BEAM 4
 
-#define BOARD   BOARD_V1
+#define BOARD   BOARD_V2
 
 
 #define PRINT_DEBUG 0
@@ -144,13 +144,15 @@ void task_test_SSD1306i2c(void *ignore) {
 
 }
 
+const char *file;
 void lora_transmit_task(void *param) {
     (void)param;
     static const char *TAG = "lora_tx";
     uint16_t cnt = 0;
     char buffer[16];
     transport_layer_t client;
-    client.src_port = TRANSPORT_CLIENT_PORT_INIT+1;
+    client.protocol = TRANSP_STREAM;
+    client.src_port = OL_TRANSPORT_CLIENT_PORT_INIT+1;
 	client.dst_port = 1;
     client.dst_addr = OL_BORDER_ROUTER_ADDR;
     int ret = ol_transp_open(&client);
@@ -159,9 +161,28 @@ void lora_transmit_task(void *param) {
         vTaskSuspend(NULL);
     }
     while(1) {
-        int len = sprintf(buffer, "Teste: %d\n", cnt++);
-        ESP_LOGI(TAG, "Destination addr: %d, Source port: %d, Destination port: %d", client.dst_addr, client.src_port, client.dst_port);
-        ol_transp_send(&client, (uint8_t *)buffer, len, portMAX_DELAY);
+        //int len = sprintf(buffer, "Teste: %d\n", cnt++);
+        #if 1
+        uint8_t *pfile = file;
+        int full_len = strlen(file);
+        int len = 0;
+        while(*file){
+            if (full_len >= OL_TRANSPORT_MAX_PAYLOAD_SIZE){
+                len = OL_TRANSPORT_MAX_PAYLOAD_SIZE;
+            }else {
+                len = full_len;
+            }
+            int sent = ol_transp_send(&client, pfile, len, portMAX_DELAY);
+            if (sent){
+                pfile += sent;
+                full_len -= sent;
+                ESP_LOGI(TAG, "Sent %d bytes to the transport layer task.", sent);
+            }
+            vTaskDelay(10);
+        }
+        #endif
+        //ESP_LOGI(TAG, "Destination addr: %d, Source port: %d, Destination port: %d", client.dst_addr, client.src_port, client.dst_port);
+        //ol_transp_send(&client, (uint8_t *)buffer, len, portMAX_DELAY);
         /*
         net_if_buffer_descriptor_t *packet  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+len, 100);
         if (packet != NULL) {
@@ -185,10 +206,11 @@ void lora_transmit_task(void *param) {
 void lora_receive_task(void *param) {
     (void)param;
     static const char *TAG = "lora_rx";
-    char buffer[16];
+    char buffer[256];
     transport_layer_t server;
+    server.protocol = TRANSP_STREAM;
     server.src_port = 1;
-	server.dst_port = TRANSPORT_CLIENT_PORT_INIT+1;
+	server.dst_port = OL_TRANSPORT_CLIENT_PORT_INIT+1;
     int ret = ol_transp_open(&server);
     if (ret == pdFAIL) {
         ESP_LOGI(TAG, "It was not possible to listen the %d port", server.src_port );
@@ -198,6 +220,7 @@ void lora_receive_task(void *param) {
         memset(buffer, 0, 16);
         int len = ol_transp_recv(&server, (uint8_t *)buffer, portMAX_DELAY);
         if (len > 0){
+            buffer[len] = '\0';
             ESP_LOGI(TAG, "Size: %d - %s", len, buffer);
         }else {
             ESP_LOGI(TAG, "Reception timeout!");
@@ -239,11 +262,11 @@ void app_main()
         // init openlora stack
         #if MODE == RECEIVER
         if (ol_init(1, OL_BORDER_ROUTER_ADDR) == pdTRUE){
-            xTaskCreate(lora_receive_task, "task_lora_tx", 2048, NULL, 4, NULL);
+            xTaskCreate(lora_receive_task, "task_lora_tx", 3072, NULL, 4, NULL);
         }
         #else
         if (ol_init(1, 1) == pdTRUE) {
-            xTaskCreate(lora_transmit_task, "task_lora_tx", 2048, NULL, 4, NULL);
+            xTaskCreate(lora_transmit_task, "task_lora_tx", 2048, NULL, 2, NULL);
         }
         #endif
    }
