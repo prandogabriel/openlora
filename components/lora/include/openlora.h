@@ -1,5 +1,5 @@
 
-#define NUMBER_OF_NET_IF_DESCRIPTORS        64
+#define NUMBER_OF_NET_IF_DESCRIPTORS        16
 #define MIN_NUMBER_OF_NET_IF_DESCRIPTORS    (NUMBER_OF_NET_IF_DESCRIPTORS / 2)
 #define MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS 100
 #define RELEASE_NET_IF_BUFFER_TIMEOUT       10
@@ -36,7 +36,7 @@ typedef struct
 {
 	uint8_t         *puc_link_buffer; 	    /* Pointer to the start of the link frame. */
     QueueHandle_t   packet_ack;
-	uint8_t         data_lenght; 			/* Holds the total frame length */
+	uint8_t         data_length; 			/* Holds the total frame length */
     uint8_t         dst_addr;
 } net_if_buffer_descriptor_t;
 
@@ -115,6 +115,6 @@ BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t tim
 int ol_transp_open(transport_layer_t *client_server);
 int ol_transp_close(transport_layer_t *server_client);
 int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t timeout);
-int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint8_t length, TickType_t timeout);
+int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint16_t length, TickType_t timeout);
 BaseType_t ol_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
 BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);

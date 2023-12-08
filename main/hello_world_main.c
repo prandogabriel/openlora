@@ -35,7 +35,7 @@
 
 #define TRANSMITTER 1
 #define RECEIVER    2
-#define MODE TRANSMITTER
+#define MODE RECEIVER
 
 
 #define BOARD_V1        1
@@ -43,7 +43,7 @@
 #define BOARD_V2_16     3
 #define BOARD_TTGO_BEAM 4
 
-#define BOARD   BOARD_V2
+#define BOARD   BOARD_V1
 
 
 #define PRINT_DEBUG 0
@@ -161,28 +161,32 @@ void lora_transmit_task(void *param) {
         vTaskSuspend(NULL);
     }
     while(1) {
-        //int len = sprintf(buffer, "Teste: %d\n", cnt++);
         #if 1
         uint8_t *pfile = file;
         int full_len = strlen(file);
-        int len = 0;
+        uint16_t len = 0;
         while(*file){
-            if (full_len >= OL_TRANSPORT_MAX_PAYLOAD_SIZE){
-                len = OL_TRANSPORT_MAX_PAYLOAD_SIZE;
+            if (full_len >= 1024){
+                len = 1024;
             }else {
                 len = full_len;
             }
             int sent = ol_transp_send(&client, pfile, len, portMAX_DELAY);
-            if (sent){
+            if (sent == len){
                 pfile += sent;
                 full_len -= sent;
                 ESP_LOGI(TAG, "Sent %d bytes to the transport layer task.", sent);
+            }else {
+                ESP_LOGI(TAG, "Fail to sent the streaming data!");
+                break;
             }
             vTaskDelay(10);
         }
+        #else
+        int len = sprintf(buffer, "Teste: %d\n", cnt++);
+        ESP_LOGI(TAG, "Destination addr: %d, Source port: %d, Destination port: %d", client.dst_addr, client.src_port, client.dst_port);
+        ol_transp_send(&client, (uint8_t *)buffer, len, portMAX_DELAY);
         #endif
-        //ESP_LOGI(TAG, "Destination addr: %d, Source port: %d, Destination port: %d", client.dst_addr, client.src_port, client.dst_port);
-        //ol_transp_send(&client, (uint8_t *)buffer, len, portMAX_DELAY);
         /*
         net_if_buffer_descriptor_t *packet  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+len, 100);
         if (packet != NULL) {
@@ -236,6 +240,56 @@ void lora_receive_task(void *param) {
     }
 }
 
+void lora_receive_task_2(void *param) {
+    (void)param;
+    static const char *TAG = "lora_rx_2";
+    char buffer[16];
+    transport_layer_t server;
+    server.protocol = TRANSP_DATAGRAM;
+    server.src_port = 2;
+	server.dst_port = OL_TRANSPORT_CLIENT_PORT_INIT+2;
+    int ret = ol_transp_open(&server);
+    if (ret == pdFAIL) {
+        ESP_LOGI(TAG, "It was not possible to listen the %d port", server.src_port );
+        vTaskSuspend(NULL);
+    }
+    while(1) {
+        memset(buffer, 0, 16);
+        int len = ol_transp_recv(&server, (uint8_t *)buffer, portMAX_DELAY);
+        if (len > 0){
+            buffer[len] = '\0';
+            ESP_LOGI(TAG, "Size: %d - %s", len, buffer);
+        }else {
+            ESP_LOGI(TAG, "Reception timeout!");
+        }
+    }
+}
+
+void lora_receive_task_3(void *param) {
+    (void)param;
+    static const char *TAG = "lora_rx_3";
+    char buffer[16];
+    transport_layer_t server;
+    server.protocol = TRANSP_DATAGRAM;
+    server.src_port = 3;
+	server.dst_port = OL_TRANSPORT_CLIENT_PORT_INIT+2;
+    int ret = ol_transp_open(&server);
+    if (ret == pdFAIL) {
+        ESP_LOGI(TAG, "It was not possible to listen the %d port", server.src_port );
+        vTaskSuspend(NULL);
+    }
+    while(1) {
+        memset(buffer, 0, 16);
+        int len = ol_transp_recv(&server, (uint8_t *)buffer, portMAX_DELAY);
+        if (len > 0){
+            buffer[len] = '\0';
+            ESP_LOGI(TAG, "Size: %d - %s", len, buffer);
+        }else {
+            ESP_LOGI(TAG, "Reception timeout!");
+        }
+    }
+}
+
 void app_main()
 {
     printf("Hello world!\n");
@@ -263,6 +317,8 @@ void app_main()
         #if MODE == RECEIVER
         if (ol_init(1, OL_BORDER_ROUTER_ADDR) == pdTRUE){
             xTaskCreate(lora_receive_task, "task_lora_tx", 3072, NULL, 4, NULL);
+            xTaskCreate(lora_receive_task_2, "task_lora_tx", 2048, NULL, 4, NULL);
+            xTaskCreate(lora_receive_task_3, "task_lora_tx", 2048, NULL, 4, NULL);
         }
         #else
         if (ol_init(1, 1) == pdTRUE) {

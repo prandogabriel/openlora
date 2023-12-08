@@ -57,7 +57,7 @@ BaseType_t ol_init_net_if_buffers(void){
     for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
         net_if_buffer_descriptors[i].puc_link_buffer = NULL;
         net_if_buffer_descriptors[i].packet_ack = NULL;
-        net_if_buffer_descriptors[i].data_lenght = 0;
+        net_if_buffer_descriptors[i].data_length = 0;
         net_if_buffer_descriptors[i].dst_addr = 0xFF;
     }
     ol_available_network_buffer = xSemaphoreCreateCounting( NUMBER_OF_NET_IF_DESCRIPTORS, NUMBER_OF_NET_IF_DESCRIPTORS );
@@ -102,7 +102,7 @@ net_if_buffer_descriptor_t *ol_get_net_if_buffer(uint8_t size, uint32_t timeout)
             for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
                 if (net_if_buffer_descriptors[i].puc_link_buffer == NULL) {
                     net_if_buffer_descriptors[i].puc_link_buffer = pvPortMalloc(size);
-                    net_if_buffer_descriptors[i].data_lenght = size;
+                    net_if_buffer_descriptors[i].data_length = size;
                     xSemaphoreGive(ol_network_buffer_mutex);
                     return &net_if_buffer_descriptors[i];
                 }
@@ -118,7 +118,7 @@ net_if_buffer_descriptor_t *ol_get_net_if_buffer(uint8_t size, uint32_t timeout)
 BaseType_t ol_release_net_if_buffer(net_if_buffer_descriptor_t *buffer){
     //taskENTER_CRITICAL();
     if (xSemaphoreTake(ol_network_buffer_mutex, RELEASE_NET_IF_BUFFER_TIMEOUT) == pdTRUE){
-        buffer->data_lenght = 0;
+        buffer->data_length = 0;
         buffer->dst_addr = 0xFF;
         vPortFree(buffer->puc_link_buffer);
         if (buffer->packet_ack != NULL){
@@ -145,7 +145,7 @@ uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if
     link_frame->seq_number = openlora.mac_seq_number;
     link_frame->dst_addr   = dst_addr;
     link_frame->src_addr   = openlora.node_addr;
-    link_frame->payload_size = net_if_buffer->data_lenght - sizeof(link_layer_header_t) - sizeof(link_layer_trailer_t);
+    link_frame->payload_size = net_if_buffer->data_length - sizeof(link_layer_header_t) - sizeof(link_layer_trailer_t);
 
     link_layer_trailer_t *link_trailer = (link_layer_trailer_t *)&net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+link_frame->payload_size];
 
@@ -190,9 +190,9 @@ uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if
             return pdFALSE;
         }
 
-        //ESP_LOGI(OPEN_LORA_TAG, "Transmitting an ol frame with %d bytes: %s", net_if_buffer->data_lenght, &net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)]);
-        ESP_LOGI(OPEN_LORA_TAG, "Transmitting an ol frame with %d bytes", net_if_buffer->data_lenght);
-        uint32_t ret = lora_send_frame(net_if_buffer->puc_link_buffer, net_if_buffer->data_lenght, timeout);
+        //ESP_LOGI(OPEN_LORA_TAG, "Transmitting an ol frame with %d bytes: %s", net_if_buffer->data_length, &net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)]);
+        ESP_LOGI(OPEN_LORA_TAG, "Transmitting an ol frame with %d bytes", net_if_buffer->data_length);
+        uint32_t ret = lora_send_frame(net_if_buffer->puc_link_buffer, net_if_buffer->data_length, timeout);
         if (ret == pdTRUE) {
             // wait for the ack
             ESP_LOGI(OPEN_LORA_TAG, "Waiting ACK");
@@ -203,9 +203,9 @@ uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if
                     /* todo: analisar ol_get_net_if_buffer para o pacote de ack */
                     net_if_buffer_descriptor_t *net_if_ack_buffer = ol_get_net_if_buffer((uint8_t)len, MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS);
                     if (net_if_ack_buffer != NULL) {
-                        int x = lora_read_frame(net_if_ack_buffer->puc_link_buffer, net_if_ack_buffer->data_lenght);
+                        int x = lora_read_frame(net_if_ack_buffer->puc_link_buffer, net_if_ack_buffer->data_length);
                         if (x){
-                            uint16_t crc = usLORACRC16(net_if_ack_buffer->puc_link_buffer, (net_if_ack_buffer->data_lenght - sizeof(link_layer_trailer_t)));
+                            uint16_t crc = usLORACRC16(net_if_ack_buffer->puc_link_buffer, (net_if_ack_buffer->data_length - sizeof(link_layer_trailer_t)));
                             //ESP_LOGI(OPEN_LORA_TAG, "calc ack: %x - packet acc: %x", crc, ack_packet.mac_ack_packet.crc);
                             link_layer_header_t *link_ack_frame = (link_layer_header_t *)net_if_ack_buffer->puc_link_buffer;
                             link_layer_trailer_t *link_ack_trailer = (link_layer_trailer_t *)&net_if_ack_buffer->puc_link_buffer[sizeof(link_layer_header_t)];
@@ -264,7 +264,7 @@ uint32_t ol_send_link_ack(net_if_buffer_descriptor_t *net_if_buffer, uint32_t ti
         link_layer_trailer_t *link_ack_trailer = (link_layer_trailer_t *)&net_if_ack_buffer->puc_link_buffer[sizeof(link_layer_header_t)];
         link_ack_trailer->crc = usLORACRC16(net_if_ack_buffer->puc_link_buffer, sizeof(link_layer_header_t));
 
-        uint32_t ret = lora_send_frame(net_if_ack_buffer->puc_link_buffer, net_if_ack_buffer->data_lenght, timeout);
+        uint32_t ret = lora_send_frame(net_if_ack_buffer->puc_link_buffer, net_if_ack_buffer->data_length, timeout);
         // todo: analyze ol_release_net_if_buffer fail
         (void)ol_release_net_if_buffer(net_if_ack_buffer);
         return ret;
@@ -278,11 +278,11 @@ void ol_receive_link_frame(uint32_t timeout){
         /* todo: analisar o ol_get_net_if_buffer em ol_receive_link_frame */
         net_if_buffer_descriptor_t *net_if_buffer = ol_get_net_if_buffer((uint8_t)len, MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS);
         if (net_if_buffer != NULL){
-            int x = lora_read_frame(net_if_buffer->puc_link_buffer, net_if_buffer->data_lenght);
+            int x = lora_read_frame(net_if_buffer->puc_link_buffer, net_if_buffer->data_length);
             if (x) {
                 link_layer_header_t *link_frame_header = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
                 link_layer_trailer_t *link_frame_trailer = (link_layer_trailer_t *)&net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+link_frame_header->payload_size];
-                uint16_t crc = usLORACRC16(net_if_buffer->puc_link_buffer, (net_if_buffer->data_lenght - sizeof(link_layer_trailer_t)));
+                uint16_t crc = usLORACRC16(net_if_buffer->puc_link_buffer, (net_if_buffer->data_length - sizeof(link_layer_trailer_t)));
                 if (link_frame_trailer->crc == crc) {
                     if ((link_frame_header->frame_type == DATA_FRAME) && (link_frame_header->network_id == openlora.nwk_id) && (link_frame_header->dst_addr == openlora.node_addr)) {
                         if (ol_send_link_ack(net_if_buffer, LINK_ACK_TIMEOUT) == pdTRUE) {
@@ -291,15 +291,19 @@ void ol_receive_link_frame(uint32_t timeout){
                                 if (xQueueSendToBack(rx_link_layer_queue, &net_if_buffer, timeout) == pdTRUE) {
                                     ESP_LOGI(OPEN_LORA_TAG, "link frame sent to the upper layer");
                                 }else {
-                                    ESP_LOGI(OPEN_LORA_TAG, "full upper layer queue");
                                     // todo: analyze ol_release_net_if_buffer fail
                                     (void)ol_release_net_if_buffer(net_if_buffer);
+                                    ESP_LOGI(OPEN_LORA_TAG, "full upper layer queue");
                                 }
+                            }else{
+                                // todo: analyze ol_release_net_if_buffer fail
+                                (void)ol_release_net_if_buffer(net_if_buffer);
+                                ESP_LOGI(OPEN_LORA_TAG, "Do not proccess a repeated frame!");
                             }
                         }else{
-                            ESP_LOGI(OPEN_LORA_TAG, "No free buffer descriptor to send ack packet");
                             // todo: analyze ol_release_net_if_buffer fail
                             (void)ol_release_net_if_buffer(net_if_buffer);
+                            ESP_LOGI(OPEN_LORA_TAG, "No free buffer descriptor to send ack packet");
                         }
                     }else {
                         /* todo: Testar se o pacote é broadcast */
@@ -388,7 +392,7 @@ void ol_link_layer_task(void *arg) {
                 ESP_LOGI(TAG, "Fail to sent the frame to the radio!");
             }else {
                 if (frame->packet_ack != NULL){
-                    uint8_t len = frame->data_lenght - sizeof(link_layer_header_t) -sizeof(link_layer_trailer_t) - sizeof(transport_layer_header_t);
+                    uint8_t len = frame->data_length - sizeof(link_layer_header_t) -sizeof(link_layer_trailer_t) - sizeof(transport_layer_header_t);
                     xQueueSendToBack(frame->packet_ack, &len, 10);
                 }
             }
@@ -455,7 +459,7 @@ BaseType_t ol_transp_layer_receive_packet(net_if_buffer_descriptor_t *packet){
         while(server_client != NULL) {
             // is there a src port listening/waiting for this destination port?
             /*ESP_LOGI(OPEN_LORA_TAG, "Received packet:\n\r");
-            for(int i=0; i<packet->data_lenght; i++){
+            for(int i=0; i<packet->data_length; i++){
                 ESP_LOGI(OPEN_LORA_TAG, "%d ", packet->puc_link_buffer[i]);
             }*/
             //link_layer_header_t *link_frame_header = (link_layer_header_t *)packet->puc_link_buffer;
@@ -582,13 +586,15 @@ int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t
         transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)];
         uint8_t *payload = &datagram->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
         memcpy(buffer, payload,transp_header->payload_size);
-        return transp_header->payload_size;
+        int len = transp_header->payload_size;
+        ol_release_net_if_buffer(datagram);
+        return len;
     }
 	return pdFAIL;
 }
 
 
-int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint8_t length, TickType_t timeout){
+int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint16_t length, TickType_t timeout){
     // send a transport layer segment/datagram
     // todo: verificar a quantidade de net if buffers antes de tentar enviar
     int ret = 0;
@@ -624,41 +630,54 @@ int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint8_t le
             }while(retries > 0);
         }
     }else if (server_client->protocol == TRANSP_STREAM){
-        int retries = 3;
-        do {
-            BaseType_t free_net_buffers = ol_get_number_of_free_net_if_buffer();
-            if (free_net_buffers >= MIN_NUMBER_OF_NET_IF_DESCRIPTORS) {
-                net_if_buffer_descriptor_t *segment  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+sizeof(transport_layer_header_t)+length, timeout);
-                transport_layer_header_t *transp_header = (transport_layer_header_t *)&segment->puc_link_buffer[sizeof(link_layer_header_t)];
-                uint8_t *payload = (uint8_t *)&segment->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
-                transp_header->src_port = server_client->src_port;
-                transp_header->dst_port = server_client->dst_port;
-                transp_header->payload_size = length;
-                transp_header->protocol = server_client->protocol;
-                segment->dst_addr = server_client->dst_addr;
-                memcpy(payload, buffer, length);
-                /*
-                ESP_LOGI(OPEN_LORA_TAG, "Transmitted packet:\n\r");
-                for(int i=0; i<21; i++){
-                    ESP_LOGI(OPEN_LORA_TAG, "%d ", datagram->puc_link_buffer[i]);
-                }
-                */
-                segment->packet_ack = server_client->transp_ack;
-                ol_to_transport_layer(segment, timeout);
-
-                // Wait for confirmation of the delivered package or error
-                uint8_t len = 0;
-                xQueueReceive(server_client->transp_ack, &len, timeout);
-                ESP_LOGI(OPEN_LORA_TAG, "Len: %d - lenght: %d", len, length);
-                if (len == length){
-                    ret = length;
-                }
-                break;
+        uint16_t bytes_left = length;
+        while(bytes_left > 0){
+            uint16_t bytes_count;
+            if (bytes_left > OL_TRANSPORT_MAX_PAYLOAD_SIZE){
+                bytes_count = OL_TRANSPORT_MAX_PAYLOAD_SIZE;
             }else {
-                retries--;
-                vTaskDelay(timeout/3);
+                bytes_count = bytes_left;
             }
-        }while(retries > 0);
+            int retries = 3;
+            do {
+                BaseType_t free_net_buffers = ol_get_number_of_free_net_if_buffer();
+                if (free_net_buffers >= MIN_NUMBER_OF_NET_IF_DESCRIPTORS) {
+                    net_if_buffer_descriptor_t *segment  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+sizeof(transport_layer_header_t)+bytes_count, timeout);
+                    transport_layer_header_t *transp_header = (transport_layer_header_t *)&segment->puc_link_buffer[sizeof(link_layer_header_t)];
+                    uint8_t *payload = (uint8_t *)&segment->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
+                    transp_header->src_port = server_client->src_port;
+                    transp_header->dst_port = server_client->dst_port;
+                    transp_header->payload_size = bytes_count;
+                    transp_header->protocol = server_client->protocol;
+                    segment->dst_addr = server_client->dst_addr;
+                    memcpy(payload, buffer, bytes_count);
+                    /*
+                    ESP_LOGI(OPEN_LORA_TAG, "Transmitted packet:\n\r");
+                    for(int i=0; i<21; i++){
+                        ESP_LOGI(OPEN_LORA_TAG, "%d ", datagram->puc_link_buffer[i]);
+                    }
+                    */
+                    segment->packet_ack = server_client->transp_ack;
+                    ol_to_transport_layer(segment, timeout);
+
+                    // Wait for confirmation of the delivered package or error
+                    uint8_t len = 0;
+                    xQueueReceive(server_client->transp_ack, &len, timeout);
+                    if (len == bytes_count){
+                        // increments the return total length
+                        ret += bytes_count;
+                        // decrements the bytes left
+                        bytes_left -= bytes_count;
+                        // increments the payload buffer pointer
+                        buffer += bytes_count;
+                    }
+                    break;
+                }else {
+                    retries--;
+                    vTaskDelay(timeout/3);
+                }
+            }while(retries > 0);
+        }
     }
     return ret;
 }
