@@ -19,7 +19,7 @@
 
 #include "esp_random.h"
 #include "backoff_algorithm.h"
-
+#include <openssl/sha.h>
 
 static net_if_buffer_descriptor_t net_if_buffer_descriptors[NUMBER_OF_NET_IF_DESCRIPTORS];
 static openlora_t openlora;
@@ -680,4 +680,86 @@ int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint16_t l
         }
     }
     return ret;
+}
+
+
+
+int calculate_sha256(const uint8_t *data, size_t length, uint8_t *digest) {
+    SHA256_CTX sha256;
+    if (!SHA256_Init(&sha256)) {
+        return -1;  // Falha na inicialização do contexto SHA-256
+    }
+
+    if (!SHA256_Update(&sha256, data, length)) {
+        return -1;  // Falha na atualização do contexto SHA-256
+    }
+
+    if (!SHA256_Final(digest, &sha256)) {
+        return -1;  // Falha na finalização do contexto SHA-256
+    }
+
+    return 0;  // Sucesso
+}
+
+
+// TODO criar uma estrutura e adicionar header...
+
+int ol_app_send_file(const char *file_content) {
+    static const char *TAG = "ol_app_send_file";
+    transport_layer_t client;
+    client.protocol = TRANSP_STREAM;
+    client.src_port = OL_TRANSPORT_CLIENT_PORT_INIT + 1;
+    client.dst_port = 1;
+    client.dst_addr = OL_BORDER_ROUTER_ADDR;
+
+    int ret = ol_transp_open(&client);
+
+    if (ret == pdFAIL) {
+        ESP_LOGI(TAG, "It was not possible to connect to the %d port", client.dst_port);
+        return -1;
+    }
+
+    size_t file_size = strlen(file_content);
+
+    // Calcular o hash SHA-256 do conteúdo do arquivo
+    uint8_t sha256_digest[SHA256_DIGEST_LENGTH];
+    if (calculate_sha256((const uint8_t *)file_content, file_size, sha256_digest) != 0) {
+        ESP_LOGI(TAG, "Erro ao calcular o hash SHA-256 do arquivo");
+        ol_transp_close(&client);
+        return -1;
+    }
+
+    // Enviar o arquivo em chunks
+    const char *current_position = file_content;
+
+    while (file_size > 0) {
+        size_t bytes_to_send = (file_size > FILE_BUFFER_SIZE) ? FILE_BUFFER_SIZE : file_size;
+
+        // Enviar o chunk usando a função de transporte existente
+        int sent_bytes = ol_transp_send(&client, (uint8_t *)current_position, bytes_to_send, portMAX_DELAY);
+
+        if (sent_bytes <= 0) {
+            ESP_LOGI(TAG, "Erro ao enviar o chunk do arquivo");
+            ol_transp_close(&client);  // Fechar a conexão em caso de erro
+            return -1;
+        }
+
+        // Atualizar a posição atual e o tamanho restante
+        current_position += sent_bytes;
+        file_size -= sent_bytes;
+
+        vTaskDelay(10);  // Adicionar um pequeno atraso entre os chunks se necessário
+    }
+
+    // Enviar o hash SHA-256
+    int sent_hash = ol_transp_send(&client, sha256_digest, SHA256_DIGEST_LENGTH, portMAX_DELAY);
+
+    if (sent_hash <= 0) {
+        ESP_LOGI(TAG, "Erro ao enviar o hash SHA-256");
+        ol_transp_close(&client);  // Fechar a conexão em caso de erro
+        return -1;
+    }
+
+    ol_transp_close(&client);  // Fechar a conexão após o envio do arquivo e do hash
+    return 0;  // Sucesso
 }

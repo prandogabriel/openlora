@@ -1,8 +1,16 @@
 {
     "idf.adapterTargetName": "esp32",
     "files.associations": {
+        ".sequelizerc": "javascript",
+        ".stylelintrc": "json",
+        ".prettierrc": "json",
+        "tsconfig.json": "json",
+        "*.proto": "3d",
+        "*.webpack.js": "webpack",
+        "*.list": "c",
         "compare": "c",
         "cstdlib": "c",
-        "u8g2_esp32_hal.h": "c"
+        "u8g2_esp32_hal.h": "c",
+        "sha.h": "c"
     }
 }

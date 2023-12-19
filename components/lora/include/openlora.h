@@ -20,6 +20,9 @@
 #define OL_TRANSPORT_CLIENT_PORT_INIT         0x80
 #define OL_TRANSPORT_MAX_PAYLOAD_SIZE         216 // excludes the protocol headers and trailers
 
+#define FILE_BUFFER_SIZE 1024
+#define SHA256_DIGEST_LENGTH 32
+
 typedef struct openlora_t_ {
     uint8_t  nwk_id;
     uint8_t  node_addr;
@@ -118,3 +121,16 @@ int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t
 int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint16_t length, TickType_t timeout);
 BaseType_t ol_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
 BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
+
+typedef enum __attribute__((packed)) {
+    FILE_CONTENT_TYPE = 1,
+    SHA256_DIGEST_TYPE
+}content_type_t;
+
+typedef struct __attribute__((packed, aligned(1))) {
+    content_type_t   message_type;
+    uint8_t content_length;
+}app_layer_header_t;
+
+
+int ol_app_send_file(uint8_t *file_path);
