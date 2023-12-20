@@ -20,7 +20,7 @@
 #define OL_TRANSPORT_CLIENT_PORT_INIT         0x80
 #define OL_TRANSPORT_MAX_PAYLOAD_SIZE         216 // excludes the protocol headers and trailers
 
-#define FILE_BUFFER_SIZE 1024
+#define FILE_BUFFER_SIZE 64
 #define SHA256_DIGEST_LENGTH 32
 
 typedef struct openlora_t_ {
@@ -133,4 +133,4 @@ typedef struct __attribute__((packed, aligned(1))) {
 }app_layer_header_t;
 
 
-int ol_app_send_file(uint8_t *file_path);
+BaseType_t ol_app_send_file(uint8_t *file_content);
