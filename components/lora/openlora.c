@@ -19,7 +19,6 @@
 
 #include "esp_random.h"
 #include "backoff_algorithm.h"
-// #include <openssl/sha.h>
 
 static net_if_buffer_descriptor_t net_if_buffer_descriptors[NUMBER_OF_NET_IF_DESCRIPTORS];
 static openlora_t openlora;
@@ -816,30 +815,29 @@ int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint16_t l
     return ret;
 }
 
-// int calculate_sha256(const uint8_t *data, size_t length, uint8_t *digest)
-// {
-//     SHA256_CTX sha256;
-//     if (!SHA256_Init(&sha256))
-//     {
-//         return -1; // Falha na inicialização do contexto SHA-256
-//     }
+void calculate_sha256(const char *data, size_t data_len, unsigned char *hash) {
+    mbedtls_md_context_t ctx;
+    mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
+    mbedtls_md_update(&ctx, (const unsigned char *)data, data_len);
+    mbedtls_md_finish(&ctx, hash);
+    mbedtls_md_free(&ctx);
+}
 
-//     if (!SHA256_Update(&sha256, data, length))
-//     {
-//         return -1; // Falha na atualização do contexto SHA-256
-//     }
-
-//     if (!SHA256_Final(digest, &sha256))
-//     {
-//         return -1; // Falha na finalização do contexto SHA-256
-//     }
-
-//     return 0; // Sucesso
-// }
-
-BaseType_t ol_app_send_file(uint8_t *file_content)
+BaseType_t ol_app_send_file(const char *file)
 {
     static const char *TAG = "ol_app_send_file";
+    if (file == NULL)
+    {
+        ESP_LOGI(TAG, "File content is NULL");
+        return pdFAIL;
+    }
+
+    uint8_t *file_content = file;
+    int file_size = strlen(file);
+
+
     transport_layer_t client;
     client.protocol = TRANSP_STREAM;
     client.src_port = OL_TRANSPORT_CLIENT_PORT_INIT + 1;
@@ -854,16 +852,11 @@ BaseType_t ol_app_send_file(uint8_t *file_content)
         return pdFAIL;
     }
 
-    size_t file_size = strlen((const char *)file_content);
 
     // Calcular o hash SHA-256 do conteúdo do arquivo
-    uint8_t sha256_digest[SHA256_DIGEST_LENGTH] = "asf";
-    // if (calculate_sha256((const uint8_t *)file_content, file_size, sha256_digest) != 0)
-    // {
-    //     ESP_LOGI(TAG, "Erro ao calcular o hash SHA-256 do arquivo");
-    //     ol_transp_close(&client);
-    //     return -1;
-    // }
+    uint8_t sha256_digest[SHA256_DIGEST_LENGTH];
+    
+   (void)calculate_sha256((const char *)file_content, file_size, sha256_digest);
 
     size_t header_size = sizeof(app_layer_header_t);
 
@@ -883,7 +876,7 @@ BaseType_t ol_app_send_file(uint8_t *file_content)
         app_layer_header_t *header = (app_layer_header_t *)buffer;
 
         header->message_type = FILE_CONTENT_TYPE;
-        
+
         header->content_length = FILE_BUFFER_SIZE;
         // Copiar parte do conteúdo do arquivo após o cabeçalho
         memcpy(buffer, file_content, total_size);
@@ -910,12 +903,15 @@ BaseType_t ol_app_send_file(uint8_t *file_content)
     }
 
     // Enviar o hash SHA-256 (cabeçalho + hash)
-    app_layer_header_t *header_sha256 = NULL;
+    int buffer_sha256_size = SHA256_DIGEST_LENGTH + sizeof(app_layer_header_t);
+    uint8_t buffer_sha256[buffer_sha256_size];
+
+    app_layer_header_t *header_sha256 = (app_layer_header_t *)buffer_sha256;
 
     header_sha256->message_type = SHA256_DIGEST_TYPE;
     header_sha256->content_length = SHA256_DIGEST_LENGTH;
-    
-    uint8_t *buffer_sha256 = NULL;
+
+    memcpy(buffer_sha256 + sizeof(app_layer_header_t), sha256_digest, SHA256_DIGEST_LENGTH);
 
     // Enviar o cabeçalho
     ol_transp_send(&client, buffer_sha256, sizeof(header_sha256) + SHA256_DIGEST_LENGTH, portMAX_DELAY);

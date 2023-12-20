@@ -11,6 +11,8 @@
         "compare": "c",
         "cstdlib": "c",
         "u8g2_esp32_hal.h": "c",
-        "sha.h": "c"
+        "sha.h": "c",
+        "stdint.h": "c",
+        "openlora.h": "c"
     }
 }

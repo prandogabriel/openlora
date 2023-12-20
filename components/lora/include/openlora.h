@@ -133,4 +133,6 @@ typedef struct __attribute__((packed, aligned(1))) {
 }app_layer_header_t;
 
 
-BaseType_t ol_app_send_file(uint8_t *file_content);
+BaseType_t ol_app_send_file(const char *file_content);
+
+void calculate_sha256(const char *data, size_t data_len, unsigned char *hash);

@@ -35,7 +35,7 @@
 
 #define TRANSMITTER 1
 #define RECEIVER    2
-#define MODE RECEIVER
+#define MODE TRANSMITTER
 
 
 #define BOARD_V1        1
@@ -43,7 +43,7 @@
 #define BOARD_V2_16     3
 #define BOARD_TTGO_BEAM 4
 
-#define BOARD   BOARD_V1
+#define BOARD   BOARD_V2
 
 
 #define PRINT_DEBUG 0
@@ -147,65 +147,72 @@ void task_test_SSD1306i2c(void *ignore) {
 const char *file;
 void lora_transmit_task(void *param) {
     (void)param;
-    static const char *TAG = "lora_tx";
-    transport_layer_t client;
-    client.protocol = TRANSP_STREAM;
-    client.src_port = OL_TRANSPORT_CLIENT_PORT_INIT+1;
-	client.dst_port = 1;
-    client.dst_addr = OL_BORDER_ROUTER_ADDR;
-    int ret = ol_transp_open(&client);
-    if (ret == pdFAIL) {
-        ESP_LOGI(TAG, "It was not possible to connect to the %d port", client.dst_port );
-        vTaskSuspend(NULL);
-    }
+    // static const char *TAG = "lora_tx";
     while(1) {
-        #if 1
-        uint8_t *pfile = file;
-        int full_len = strlen(file);
-        uint16_t len = 0;
-        while(*file){
-            if (full_len >= 1024){
-                len = 1024;
-            }else {
-                len = full_len;
-            }
-            int sent = ol_transp_send(&client, pfile, len, portMAX_DELAY);
-            if (sent == len){
-                pfile += sent;
-                full_len -= sent;
-                ESP_LOGI(TAG, "Sent %d bytes to the transport layer task.", sent);
-            }else {
-                ESP_LOGI(TAG, "Fail to sent the streaming data!");
-                break;
-            }
-            vTaskDelay(10);
-        }
-        #else
-        char buffer[16];
-        uint16_t cnt = 0;
-    
-        int len = sprintf(buffer, "Teste: %d\n", cnt++);
-        ESP_LOGI(TAG, "Destination addr: %d, Source port: %d, Destination port: %d", client.dst_addr, client.src_port, client.dst_port);
-        ol_transp_send(&client, (uint8_t *)buffer, len, portMAX_DELAY);
-        #endif
-        /*
-        net_if_buffer_descriptor_t *packet  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+len, 100);
-        if (packet != NULL) {
-            memcpy(&packet->puc_link_buffer[sizeof(link_layer_header_t)], buffer, len+1);
-            ol_to_link_layer(packet, portMAX_DELAY);
-        }
-        */
-        #if 0
-        int len = sprintf(buffer, "Teste: %d\n", cnt++);
-        if (lora_send_frame((uint8_t *)buffer, len, 1000) == pdTRUE) {
-            ESP_LOGI(TAG, "Frame transmitted!");
-        }else {
-            ESP_LOGI(TAG, "Failure on transmitting frame!");
-        }
-        #endif
-
+        (void)ol_app_send_file(file);
+        
+        ESP_LOGI(TAG, "Next iteration" );
+        
         vTaskDelay(1000);
     }
+    // transport_layer_t client;
+    // client.protocol = TRANSP_STREAM;
+    // client.src_port = OL_TRANSPORT_CLIENT_PORT_INIT+1;
+	// client.dst_port = 1;
+    // client.dst_addr = OL_BORDER_ROUTER_ADDR;
+    // int ret = ol_transp_open(&client);
+    // if (ret == pdFAIL) {
+    //     ESP_LOGI(TAG, "It was not possible to connect to the %d port", client.dst_port );
+    //     vTaskSuspend(NULL);
+    // }
+    // while(1) {
+    //     #if 1
+    //     uint8_t *pfile = file;
+    //     int full_len = strlen(file);
+    //     uint16_t len = 0;
+    //     while(*file){
+    //         if (full_len >= 1024){
+    //             len = 1024;
+    //         }else {
+    //             len = full_len;
+    //         }
+    //         int sent = ol_transp_send(&client, pfile, len, portMAX_DELAY);
+    //         if (sent == len){
+    //             pfile += sent;
+    //             full_len -= sent;
+    //             ESP_LOGI(TAG, "Sent %d bytes to the transport layer task.", sent);
+    //         }else {
+    //             ESP_LOGI(TAG, "Fail to sent the streaming data!");
+    //             break;
+    //         }
+    //         vTaskDelay(10);
+    //     }
+    //     #else
+    //     char buffer[16];
+    //     uint16_t cnt = 0;
+    
+    //     int len = sprintf(buffer, "Teste: %d\n", cnt++);
+    //     ESP_LOGI(TAG, "Destination addr: %d, Source port: %d, Destination port: %d", client.dst_addr, client.src_port, client.dst_port);
+    //     ol_transp_send(&client, (uint8_t *)buffer, len, portMAX_DELAY);
+    //     #endif
+    //     /*
+    //     net_if_buffer_descriptor_t *packet  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+len, 100);
+    //     if (packet != NULL) {
+    //         memcpy(&packet->puc_link_buffer[sizeof(link_layer_header_t)], buffer, len+1);
+    //         ol_to_link_layer(packet, portMAX_DELAY);
+    //     }
+    //     */
+    //     #if 0
+    //     int len = sprintf(buffer, "Teste: %d\n", cnt++);
+    //     if (lora_send_frame((uint8_t *)buffer, len, 1000) == pdTRUE) {
+    //         ESP_LOGI(TAG, "Frame transmitted!");
+    //     }else {
+    //         ESP_LOGI(TAG, "Failure on transmitting frame!");
+    //     }
+    //     #endif
+
+    //     vTaskDelay(1000);
+    // }
 }
 
 void lora_receive_task(void *param) {
